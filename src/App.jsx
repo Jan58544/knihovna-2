@@ -29,12 +29,12 @@ export default function App() {
     }
   }, [books]);
 
-  const handleScanSuccess = async (isbn) => {
+  const handleScanSuccess = async (scannedValue) => {
     setIsLoading(true);
-    setStatusMessage({ type: 'info', text: `Searching database for ISBN: ${isbn}...` });
+    setStatusMessage({ type: 'info', text: `Searching database for: ${scannedValue}...` });
 
     try {
-      const bookData = await fetchBookByIsbn(isbn);
+      const bookData = await fetchBookByIsbn(scannedValue, { title: scannedValue });
 
       if (bookData) {
         setBooks((prevBooks) => [bookData, ...prevBooks]);
@@ -42,11 +42,11 @@ export default function App() {
       } else {
         setStatusMessage({
           type: 'error',
-          text: `Book with ISBN ${isbn} was not found in the database.`,
+          text: `Book "${scannedValue}" was not found. Try scanning again or enter ISBN manually.`,
         });
       }
     } catch (err) {
-      console.error('Error processing scanned ISBN:', err);
+      console.error('Error processing scanned input:', err);
       setStatusMessage({
         type: 'error',
         text: 'Failed to look up book details. Please check your internet connection.',
@@ -55,7 +55,7 @@ export default function App() {
       setIsLoading(false);
       setTimeout(() => {
         setStatusMessage(null);
-      }, 4000);
+      }, 5000);
     }
   };
 
