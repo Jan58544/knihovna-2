@@ -181,4 +181,36 @@ describe('bookService', () => {
       'https://www.googleapis.com/books/v1/volumes?q=isbn:0306406152'
     );
   });
+
+  it('performs title search when non-ISBN search string is supplied', async () => {
+    fetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        items: [
+          {
+            volumeInfo: {
+              title: 'Clean Code',
+              authors: ['Robert C. Martin'],
+              industryIdentifiers: [{ type: 'ISBN_13', identifier: '9780132350884' }],
+            },
+          },
+        ],
+      }),
+    });
+
+    const book = await fetchBookByIsbn('Clean Code');
+    expect(book).not.toBeNull();
+    expect(book.title).toBe('Clean Code');
+    expect(book.authors).toBe('Robert C. Martin');
+    expect(fetch).toHaveBeenCalledWith(
+      'https://www.googleapis.com/books/v1/volumes?q=Clean%20Code'
+    );
+  });
+
+  it('handles network / fetch failure gracefully without crashing', async () => {
+    fetch.mockRejectedValueOnce(new Error('Network error'));
+
+    const book = await fetchBookByIsbn('9780306406157');
+    expect(book).toBeNull();
+  });
 });

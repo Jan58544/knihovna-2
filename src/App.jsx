@@ -3,6 +3,7 @@ import { Camera, BookOpen, Loader2, Library } from 'lucide-react';
 import ScannerModal from './components/ScannerModal';
 import BookCard from './components/BookCard';
 import { fetchBookByIsbn } from './services/bookService';
+import { cleanIsbn } from './utils/isbnUtils';
 
 const LOCAL_STORAGE_KEY = 'scanned_books_feed_v1';
 
@@ -30,19 +31,49 @@ export default function App() {
   }, [books]);
 
   const handleScanSuccess = async (scannedValue) => {
+    const rawVal = (scannedValue || '').trim();
+    if (!rawVal) return;
+
     setIsLoading(true);
-    setStatusMessage({ type: 'info', text: `Searching database for: ${scannedValue}...` });
+    setStatusMessage({ type: 'info', text: `Searching database for: ${rawVal}...` });
 
     try {
-      const bookData = await fetchBookByIsbn(scannedValue, { title: scannedValue });
+      const bookData = await fetchBookByIsbn(rawVal, { title: rawVal });
 
       if (bookData) {
-        setBooks((prevBooks) => [bookData, ...prevBooks]);
-        setStatusMessage({ type: 'success', text: `Added "${bookData.title}" to your feed!` });
+        // Check if book already exists in library feed by ISBN or Title
+        const newCleanIsbn = cleanIsbn(bookData.isbn);
+        const isDuplicate = books.some((existing) => {
+          const existingCleanIsbn = cleanIsbn(existing.isbn);
+          if (newCleanIsbn && existingCleanIsbn && newCleanIsbn === existingCleanIsbn) {
+            return true;
+          }
+          if (
+            existing.title &&
+            bookData.title &&
+            existing.title.trim().toLowerCase() === bookData.title.trim().toLowerCase() &&
+            existing.authors &&
+            bookData.authors &&
+            existing.authors.trim().toLowerCase() === bookData.authors.trim().toLowerCase()
+          ) {
+            return true;
+          }
+          return false;
+        });
+
+        if (isDuplicate) {
+          setStatusMessage({
+            type: 'error',
+            text: `"${bookData.title}" is already in your library!`,
+          });
+        } else {
+          setBooks((prevBooks) => [bookData, ...prevBooks]);
+          setStatusMessage({ type: 'success', text: `Added "${bookData.title}" to your feed!` });
+        }
       } else {
         setStatusMessage({
           type: 'error',
-          text: `Book "${scannedValue}" was not found. Try scanning again or enter ISBN manually.`,
+          text: `Book "${rawVal}" was not found. Try scanning again or enter ISBN manually.`,
         });
       }
     } catch (err) {
@@ -80,6 +111,7 @@ export default function App() {
         {/* Scan Button Section (Fixed directly above feed) */}
         <div className="px-4 py-4 bg-gradient-to-b from-gray-50 to-white border-b border-gray-100">
           <button
+            type="button"
             onClick={() => setIsScannerOpen(true)}
             disabled={isLoading}
             className="w-full py-3.5 px-4 bg-gradient-to-r from-indigo-600 via-purple-600 to-pink-600 text-white font-semibold rounded-xl shadow-md hover:opacity-95 active:scale-[0.99] transition-all flex items-center justify-center gap-2 disabled:opacity-50"
