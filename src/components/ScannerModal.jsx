@@ -6,41 +6,56 @@ import { cleanIsbn, isValidIsbn, attemptOcrCorrection } from '../utils/isbnUtils
 export default function ScannerModal({ isOpen, onClose, onScanSuccess }) {
   const [mode, setMode] = useState('camera'); // 'camera' or 'manual'
   const [manualInput, setManualInput] = useState('');
+  const [manualTitle, setManualTitle] = useState('');
+  const [manualAuthor, setManualAuthor] = useState('');
+  const [showCustomFields, setShowCustomFields] = useState(false);
   const [cameraError, setCameraError] = useState(null);
   const [manualError, setManualError] = useState(null);
   const [isInitializing, setIsInitializing] = useState(false);
+  const [scanStatusInfo, setScanStatusInfo] = useState(null);
   const scannerRef = useRef(null);
-  const isScannedRef = useRef(false);
+  const scannedLockRef = useRef(false);
+  const lastScannedTimeRef = useRef(0);
 
   useEffect(() => {
     if (!isOpen || mode !== 'camera') {
-      if (scannerRef.current && scannerRef.current.isScanning) {
-        scannerRef.current.stop().catch(() => {}).finally(() => {
+      const activeScanner = scannerRef.current;
+      if (activeScanner && activeScanner.isScanning) {
+        console.log('[scan] Stopping active camera session on mode/modal close');
+        activeScanner.stop().catch((err) => {
+          console.warn('[scan] Error stopping scanner on mode change:', err);
+        }).finally(() => {
           try {
-            scannerRef.current.clear();
-          } catch (e) {}
-          scannerRef.current = null;
+            activeScanner.clear();
+          } catch {
+            /* ignore */
+          }
+          if (scannerRef.current === activeScanner) {
+            scannerRef.current = null;
+          }
         });
       }
       return;
     }
 
-    isScannedRef.current = false;
+    scannedLockRef.current = false;
     setIsInitializing(true);
     setCameraError(null);
+    setScanStatusInfo('Snímání...');
 
     const regionId = 'reader';
-    let html5Qrcode = null;
 
     const startScanner = async () => {
       try {
+        console.log('[scan] Initializing camera scanner...');
         const element = document.getElementById(regionId);
         if (!element) {
+          console.warn('[scan] Scanner DOM element #reader not found');
           setIsInitializing(false);
           return;
         }
 
-        html5Qrcode = new Html5Qrcode(regionId);
+        const html5Qrcode = new Html5Qrcode(regionId);
         scannerRef.current = html5Qrcode;
 
         const config = {
@@ -59,37 +74,54 @@ export default function ScannerModal({ isOpen, onClose, onScanSuccess }) {
           { facingMode: 'environment' },
           config,
           (decodedText) => {
-            if (isScannedRef.current) return;
-            isScannedRef.current = true;
+            const now = Date.now();
+            // Debounce same or fast rapid detections for ~2 seconds
+            if (scannedLockRef.current || (now - lastScannedTimeRef.current < 2000)) {
+              console.log('[scan] Debouncing rapid scan event:', decodedText);
+              return;
+            }
+
+            scannedLockRef.current = true;
+            lastScannedTimeRef.current = now;
+
+            console.log('[scan] Code detected:', decodedText);
 
             const cleaned = cleanIsbn(decodedText);
             const valid = isValidIsbn(cleaned) || attemptOcrCorrection(decodedText);
             const valueToSend = valid || decodedText;
 
-            if (scannerRef.current && scannerRef.current.isScanning) {
-              scannerRef.current
+            console.log(`[scan] ISBN recognized: ${valueToSend} (raw: ${decodedText})`);
+            setScanStatusInfo(`Kód detekován: ${decodedText} | ISBN rozpoznáno: ${valueToSend}`);
+
+            // Safely stop scanner without blocking or losing onScanSuccess
+            const instance = scannerRef.current;
+            if (instance && instance.isScanning) {
+              instance
                 .stop()
-                .catch(() => {})
-                .then(() => {
-                  try {
-                    scannerRef.current?.clear();
-                  } catch (e) {}
-                })
+                .catch((err) => console.warn('[scan] Non-fatal scanner stop warning:', err))
                 .finally(() => {
-                  onScanSuccess(valueToSend);
-                  onClose();
+                  try {
+                    instance.clear();
+                  } catch {
+                    /* ignore */
+                  }
+                  if (scannerRef.current === instance) {
+                    scannerRef.current = null;
+                  }
                 });
-            } else {
-              onScanSuccess(valueToSend);
-              onClose();
             }
+
+            // Immediately notify parent & close modal so result is never lost or blocked
+            onScanSuccess(valueToSend);
+            onClose();
           },
           () => {}
         );
+        console.log('[scan] Camera scanner started successfully');
         setIsInitializing(false);
       } catch (err) {
-        console.error('Camera initialization error:', err);
-        setCameraError('Unable to access camera. Please allow camera permissions or enter ISBN manually.');
+        console.error('[scan] Camera initialization error:', err);
+        setCameraError('Kamera není dostupná nebo přístup nebyl povolen. Zadejte prosím ISBN ručně.');
         setIsInitializing(false);
       }
     };
@@ -100,12 +132,18 @@ export default function ScannerModal({ isOpen, onClose, onScanSuccess }) {
 
     return () => {
       clearTimeout(timer);
-      if (scannerRef.current && scannerRef.current.isScanning) {
-        scannerRef.current.stop().catch(() => {}).then(() => {
+      const activeScanner = scannerRef.current;
+      if (activeScanner && activeScanner.isScanning) {
+        console.log('[scan] Cleanup stopping camera scanner');
+        activeScanner.stop().catch(() => {}).finally(() => {
           try {
-            scannerRef.current?.clear();
-          } catch (e) {}
-          scannerRef.current = null;
+            activeScanner.clear();
+          } catch {
+            /* ignore */
+          }
+          if (scannerRef.current === activeScanner) {
+            scannerRef.current = null;
+          }
         });
       }
     };
@@ -113,6 +151,9 @@ export default function ScannerModal({ isOpen, onClose, onScanSuccess }) {
 
   const handleClose = () => {
     setManualInput('');
+    setManualTitle('');
+    setManualAuthor('');
+    setShowCustomFields(false);
     setCameraError(null);
     setManualError(null);
     setMode('camera');
@@ -123,8 +164,32 @@ export default function ScannerModal({ isOpen, onClose, onScanSuccess }) {
     e.preventDefault();
     setManualError(null);
     const trimmed = manualInput.trim();
+
+    if (showCustomFields || manualTitle.trim()) {
+      if (!manualTitle.trim()) {
+        setManualError('Zadejte prosím název knihy.');
+        return;
+      }
+      const customBook = {
+        id: `${cleanIsbn(trimmed) || 'MANUAL'}-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
+        isbn: cleanIsbn(trimmed) || trimmed || '',
+        title: manualTitle.trim(),
+        authors: manualAuthor.trim() || 'Neznámý autor',
+        publisher: null,
+        publishedDate: null,
+        description: null,
+        pageCount: null,
+        coverUrl: null,
+        scannedAt: new Date().toISOString(),
+      };
+      console.log('[scan] Adding manual book entry directly:', customBook);
+      onScanSuccess(trimmed, customBook);
+      handleClose();
+      return;
+    }
+
     if (!trimmed) {
-      setManualError('Please enter an ISBN or book title.');
+      setManualError('Zadejte prosím ISBN nebo název knihy.');
       return;
     }
 
@@ -133,7 +198,8 @@ export default function ScannerModal({ isOpen, onClose, onScanSuccess }) {
 
     if (isPureCode) {
       if (!isValidIsbn(cleaned) && !attemptOcrCorrection(trimmed)) {
-        setManualError('Invalid ISBN checksum or length. Please check the code or search by title.');
+        setManualError('Neplatné ISBN. Zkontrolujte kód nebo zvolte ruční zadání názvu níže.');
+        setShowCustomFields(true);
         return;
       }
     }
@@ -167,7 +233,7 @@ export default function ScannerModal({ isOpen, onClose, onScanSuccess }) {
               }`}
             >
               <Camera className="w-4 h-4" />
-              <span>Camera</span>
+              <span>Kamera</span>
             </button>
             <button
               type="button"
@@ -183,7 +249,7 @@ export default function ScannerModal({ isOpen, onClose, onScanSuccess }) {
               }`}
             >
               <Keyboard className="w-4 h-4" />
-              <span>Manual Entry</span>
+              <span>Ruční zadání</span>
             </button>
           </div>
 
@@ -191,7 +257,7 @@ export default function ScannerModal({ isOpen, onClose, onScanSuccess }) {
             type="button"
             onClick={handleClose}
             className="p-1 rounded-full text-neutral-400 hover:text-white hover:bg-neutral-800 transition-colors"
-            aria-label="Close scanner"
+            aria-label="Zavřít skener"
           >
             <X className="w-6 h-6" />
           </button>
@@ -203,7 +269,7 @@ export default function ScannerModal({ isOpen, onClose, onScanSuccess }) {
             {isInitializing && (
               <div className="absolute inset-0 flex flex-col items-center justify-center text-neutral-400 gap-2 z-10 bg-black">
                 <RefreshCw className="w-8 h-8 animate-spin text-indigo-500" />
-                <p className="text-sm font-medium">Starting camera...</p>
+                <p className="text-sm font-medium">Spouštění kamery...</p>
               </div>
             )}
 
@@ -216,23 +282,30 @@ export default function ScannerModal({ isOpen, onClose, onScanSuccess }) {
                   onClick={() => setMode('manual')}
                   className="mt-3 px-4 py-2 bg-indigo-600 text-white font-medium rounded-lg text-xs hover:bg-indigo-500 transition-colors"
                 >
-                  Enter ISBN Manually
+                  Zadyt ISBN ručně
                 </button>
               </div>
             ) : (
-              <div id="reader" className="w-full overflow-hidden"></div>
+              <>
+                <div id="reader" className="w-full overflow-hidden"></div>
+                {scanStatusInfo && (
+                  <div className="absolute bottom-2 left-2 right-2 bg-black/75 text-emerald-400 px-3 py-1.5 rounded-lg text-xs font-mono text-center border border-emerald-500/30">
+                    {scanStatusInfo}
+                  </div>
+                )}
+              </>
             )}
           </div>
         ) : (
           <form onSubmit={handleManualSubmit} className="p-6 bg-neutral-950 flex flex-col gap-4">
             <div>
               <label htmlFor="isbnInput" className="block text-xs font-medium text-neutral-300 mb-1.5">
-                ISBN or Book Title / Author
+                ISBN nebo název / autor knihy
               </label>
               <input
                 id="isbnInput"
                 type="text"
-                placeholder="e.g. 978-80-12345-67-8 or 0306406152"
+                placeholder="např. 978-80-12345-67-8 nebo Clean Code"
                 value={manualInput}
                 onChange={(e) => {
                   setManualInput(e.target.value);
@@ -241,25 +314,60 @@ export default function ScannerModal({ isOpen, onClose, onScanSuccess }) {
                 autoFocus
                 className="w-full px-3.5 py-2.5 bg-neutral-900 border border-neutral-800 rounded-xl text-white text-sm focus:outline-none focus:border-indigo-500 placeholder-neutral-500"
               />
-              {manualError ? (
+              {manualError && (
                 <p className="text-xs text-rose-400 mt-1.5 flex items-center gap-1">
                   <AlertCircle className="w-3.5 h-3.5" />
                   <span>{manualError}</span>
                 </p>
-              ) : (
-                <p className="text-[11px] text-neutral-500 mt-1">
-                  Supports ISBN-10, ISBN-13 (with or without hyphens) or book title.
-                </p>
               )}
             </div>
 
+            {showCustomFields ? (
+              <div className="space-y-3 pt-2 border-t border-neutral-800">
+                <div>
+                  <label htmlFor="manualTitleInput" className="block text-xs font-medium text-neutral-300 mb-1">
+                    Název knihy *
+                  </label>
+                  <input
+                    id="manualTitleInput"
+                    type="text"
+                    placeholder="Název knihy"
+                    value={manualTitle}
+                    onChange={(e) => setManualTitle(e.target.value)}
+                    className="w-full px-3 py-2 bg-neutral-900 border border-neutral-800 rounded-lg text-white text-sm focus:outline-none focus:border-indigo-500"
+                  />
+                </div>
+                <div>
+                  <label htmlFor="manualAuthorInput" className="block text-xs font-medium text-neutral-300 mb-1">
+                    Autor
+                  </label>
+                  <input
+                    id="manualAuthorInput"
+                    type="text"
+                    placeholder="Jméno autora"
+                    value={manualAuthor}
+                    onChange={(e) => setManualAuthor(e.target.value)}
+                    className="w-full px-3 py-2 bg-neutral-900 border border-neutral-800 rounded-lg text-white text-sm focus:outline-none focus:border-indigo-500"
+                  />
+                </div>
+              </div>
+            ) : (
+              <button
+                type="button"
+                onClick={() => setShowCustomFields(true)}
+                className="text-xs text-indigo-400 hover:text-indigo-300 text-left underline"
+              >
+                + Nebo přidejte název a autora ručně bez vyhledávání
+              </button>
+            )}
+
             <button
               type="submit"
-              disabled={!manualInput.trim()}
+              disabled={!manualInput.trim() && !manualTitle.trim()}
               className="w-full py-2.5 px-4 bg-indigo-600 text-white text-sm font-semibold rounded-xl hover:bg-indigo-500 transition-colors flex items-center justify-center gap-2 disabled:opacity-50"
             >
               <Search className="w-4 h-4" />
-              <span>Search Book</span>
+              <span>{showCustomFields || manualTitle.trim() ? 'Přidat knihu do knihovny' : 'Vyhledat knihu'}</span>
             </button>
           </form>
         )}
@@ -267,8 +375,8 @@ export default function ScannerModal({ isOpen, onClose, onScanSuccess }) {
         {/* Footer Hint */}
         <div className="px-4 py-3 bg-neutral-900 border-t border-neutral-800 text-center text-xs text-neutral-400">
           {mode === 'camera'
-            ? "Position the book's ISBN barcode inside the box"
-            : "Enter an ISBN or title to look up book details"}
+            ? 'Naměřte čárový kód ISBN knihy do vyznačeného okna'
+            : 'Zadejte ISBN nebo název pro vyhledání knihy'}
         </div>
       </div>
     </div>
