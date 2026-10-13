@@ -17,14 +17,19 @@ function isVolumeMatchingIsbn(volumeInfo, targetIsbns) {
   const identifiers = volumeInfo.industryIdentifiers || [];
   const cleanTargets = targetIsbns.map(isbn => cleanIsbn(isbn)).filter(Boolean);
 
-  for (const item of identifiers) {
-    const cleanedId = cleanIsbn(item.identifier);
-    if (cleanTargets.includes(cleanedId)) {
-      return true;
+  if (identifiers.length > 0) {
+    for (const item of identifiers) {
+      const cleanedId = cleanIsbn(item.identifier);
+      if (cleanTargets.includes(cleanedId)) {
+        return true;
+      }
     }
+    // Identifiers exist but none matched target ISBNs
+    return false;
   }
 
-  return false;
+  // If no identifiers present on volumeInfo, assume true if it was returned by exact isbn query
+  return true;
 }
 
 /**
@@ -41,17 +46,20 @@ function formatGoogleBook(item, fallbackIsbn) {
   }
 
   // Find best ISBN identifier from item if available
-  let matchedIsbn = fallbackIsbn;
+  let matchedIsbn = cleanIsbn(fallbackIsbn);
   if (info.industryIdentifiers && info.industryIdentifiers.length > 0) {
     const isbn13 = info.industryIdentifiers.find(id => id.type === 'ISBN_13')?.identifier;
     const isbn10 = info.industryIdentifiers.find(id => id.type === 'ISBN_10')?.identifier;
-    matchedIsbn = cleanIsbn(isbn13 || isbn10 || fallbackIsbn);
+    const found = cleanIsbn(isbn13 || isbn10 || '');
+    if (found) {
+      matchedIsbn = found;
+    }
   }
 
   return {
-    id: `${matchedIsbn}-${Date.now()}`,
-    isbn: matchedIsbn,
-    title: info.title || 'Untitled',
+    id: `${matchedIsbn || 'BOOK'}-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
+    isbn: matchedIsbn || fallbackIsbn || '',
+    title: info.title || 'Untitled Book',
     authors: info.authors ? info.authors.join(', ') : 'Unknown Author',
     publisher: info.publisher || null,
     publishedDate: info.publishedDate || null,
@@ -71,11 +79,12 @@ function formatGoogleBook(item, fallbackIsbn) {
 function formatOpenLibraryBook(info, fallbackIsbn) {
   const authors = info.authors ? info.authors.map(a => a.name).join(', ') : 'Unknown Author';
   const coverUrl = info.cover?.large || info.cover?.medium || info.cover?.small || null;
+  const cleanedFallback = cleanIsbn(fallbackIsbn);
 
   return {
-    id: `${fallbackIsbn}-${Date.now()}`,
-    isbn: fallbackIsbn,
-    title: info.title || 'Untitled',
+    id: `${cleanedFallback || 'BOOK'}-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
+    isbn: cleanedFallback || fallbackIsbn || '',
+    title: info.title || 'Untitled Book',
     authors: authors,
     publisher: info.publishers ? info.publishers.map(p => p.name).join(', ') : null,
     publishedDate: info.publish_date || null,
@@ -87,23 +96,28 @@ function formatOpenLibraryBook(info, fallbackIsbn) {
 }
 
 /**
- * Fetches book details by ISBN or options (title/author) with fallback and verification.
+ * Fetches book details by ISBN or query text (title/author) with fallback and verification.
  *
- * @param {string} rawIsbn
+ * @param {string} rawIsbn - ISBN string or search term
  * @param {Object} [options] - Optional additional search details { title, author }
  * @returns {Promise<Object|null>} Book object or null if not found.
  */
 export async function fetchBookByIsbn(rawIsbn, options = {}) {
-  console.log('[bookService] Raw input received:', rawIsbn);
+  const queryText = (rawIsbn || '').trim();
+  console.log('[bookService] Raw input received:', queryText);
 
-  let primaryIsbn = cleanIsbn(rawIsbn);
+  if (!queryText && !options.title && !options.author) {
+    return null;
+  }
+
+  let primaryIsbn = cleanIsbn(queryText);
   let isNormalizedValid = isValidIsbn(primaryIsbn);
 
-  if (!isNormalizedValid && rawIsbn) {
+  if (!isNormalizedValid && queryText) {
     console.log('[bookService] Direct ISBN validation failed. Attempting OCR error correction...');
-    const corrected = attemptOcrCorrection(rawIsbn);
+    const corrected = attemptOcrCorrection(queryText);
     if (corrected) {
-      console.log(`[bookService] OCR correction successful: "${rawIsbn}" -> "${corrected}"`);
+      console.log(`[bookService] OCR correction successful: "${queryText}" -> "${corrected}"`);
       primaryIsbn = corrected;
       isNormalizedValid = true;
     } else {
@@ -177,15 +191,19 @@ export async function fetchBookByIsbn(rawIsbn, options = {}) {
     }
   }
 
-  // STEP 3: Fallback to title and author search if provided in options
-  if (options.title || options.author) {
-    const parts = [];
-    if (options.title) parts.push(`intitle:${options.title}`);
-    if (options.author) parts.push(`inauthor:${options.author}`);
-    const query = parts.join(' ');
-    const url = `https://www.googleapis.com/books/v1/volumes?q=${encodeURIComponent(query)}`;
+  // STEP 3: Fallback to general term / title / author search
+  const searchTerms = [];
+  if (options.title) searchTerms.push(`intitle:${options.title}`);
+  if (options.author) searchTerms.push(`inauthor:${options.author}`);
 
-    console.log(`[bookService] Primary ISBN search failed. Attempting Title/Author fallback query: ${url}`);
+  let fallbackQuery = searchTerms.join(' ');
+  if (!fallbackQuery && queryText && !isNormalizedValid) {
+    fallbackQuery = queryText;
+  }
+
+  if (fallbackQuery) {
+    const url = `https://www.googleapis.com/books/v1/volumes?q=${encodeURIComponent(fallbackQuery)}`;
+    console.log(`[bookService] Attempting general query fallback: ${url}`);
 
     try {
       const fallbackRes = await fetch(url);
@@ -193,12 +211,12 @@ export async function fetchBookByIsbn(rawIsbn, options = {}) {
         const fallbackData = await fallbackRes.json();
         if (fallbackData.items && fallbackData.items.length > 0) {
           const firstMatch = fallbackData.items[0];
-          console.log('[bookService] Book found via Title/Author search fallback:', firstMatch.volumeInfo?.title);
+          console.log('[bookService] Book found via fallback query:', firstMatch.volumeInfo?.title);
           return formatGoogleBook(firstMatch, primaryIsbn || 'MANUAL-ENTRY');
         }
       }
     } catch (err) {
-      console.warn('[bookService] Title/Author fallback query failed:', err);
+      console.warn('[bookService] General query fallback failed:', err);
     }
   }
 
