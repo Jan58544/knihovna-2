@@ -104,7 +104,7 @@ function formatOpenLibraryBook(info, fallbackIsbn) {
  */
 export async function fetchBookByIsbn(rawIsbn, options = {}) {
   const queryText = (rawIsbn || '').trim();
-  console.log('[bookService] Raw input received:', queryText);
+  console.log('[scan] [bookService] Raw input received:', queryText);
 
   if (!queryText && !options.title && !options.author) {
     return null;
@@ -114,14 +114,14 @@ export async function fetchBookByIsbn(rawIsbn, options = {}) {
   let isNormalizedValid = isValidIsbn(primaryIsbn);
 
   if (!isNormalizedValid && queryText) {
-    console.log('[bookService] Direct ISBN validation failed. Attempting OCR error correction...');
+    console.log('[scan] [bookService] Direct ISBN validation failed. Attempting OCR error correction...');
     const corrected = attemptOcrCorrection(queryText);
     if (corrected) {
-      console.log(`[bookService] OCR correction successful: "${queryText}" -> "${corrected}"`);
+      console.log(`[scan] [bookService] OCR correction successful: "${queryText}" -> "${corrected}"`);
       primaryIsbn = corrected;
       isNormalizedValid = true;
     } else {
-      console.warn('[bookService] OCR correction failed. Input is not a valid ISBN.');
+      console.warn('[scan] [bookService] OCR correction failed. Input is not a valid ISBN.');
     }
   }
 
@@ -133,7 +133,7 @@ export async function fetchBookByIsbn(rawIsbn, options = {}) {
     } else if (primaryIsbn.length === 13) {
       alternativeIsbn = isbn13To10(primaryIsbn);
     }
-    console.log(`[bookService] Normalized ISBN: ${primaryIsbn} (Valid). Alternative: ${alternativeIsbn || 'N/A'}`);
+    console.log(`[scan] [bookService] Normalized ISBN: ${primaryIsbn} (Valid). Alternative: ${alternativeIsbn || 'N/A'}`);
   }
 
   const targetIsbns = [primaryIsbn, alternativeIsbn].filter(Boolean);
@@ -142,51 +142,51 @@ export async function fetchBookByIsbn(rawIsbn, options = {}) {
   if (targetIsbns.length > 0) {
     for (const isbnToSearch of targetIsbns) {
       const url = `https://www.googleapis.com/books/v1/volumes?q=isbn:${isbnToSearch}`;
-      console.log(`[bookService] Requesting Google Books API: ${url}`);
+      console.log(`[scan] [bookService] Requesting Google Books API: ${url}`);
 
       try {
         const googleRes = await fetch(url);
-        if (googleRes.ok) {
+        if (googleRes && googleRes.ok) {
           const googleData = await googleRes.json();
           if (googleData.items && googleData.items.length > 0) {
-            console.log(`[bookService] Google Books returned ${googleData.items.length} item(s). Verifying ISBN match...`);
+            console.log(`[scan] [bookService] Google Books returned ${googleData.items.length} item(s). Verifying ISBN match...`);
 
             // Verify items against target ISBNs
             for (const item of googleData.items) {
               if (isVolumeMatchingIsbn(item.volumeInfo, targetIsbns)) {
-                console.log('[bookService] Verified book found in Google Books:', item.volumeInfo.title);
+                console.log('[scan] [bookService] Verified book found in Google Books:', item.volumeInfo.title);
                 return formatGoogleBook(item, primaryIsbn);
               }
             }
-            console.warn('[bookService] Google Books items did not match industryIdentifiers for ISBNs:', targetIsbns);
+            console.warn('[scan] [bookService] Google Books items did not match industryIdentifiers for ISBNs:', targetIsbns);
           } else {
-            console.log(`[bookService] Google Books returned 0 items for q=isbn:${isbnToSearch}`);
+            console.log(`[scan] [bookService] Google Books returned 0 items for q=isbn:${isbnToSearch}`);
           }
         }
       } catch (err) {
-        console.warn(`[bookService] Google Books API request failed for q=isbn:${isbnToSearch}:`, err);
+        console.warn(`[scan] [bookService] Google Books API request failed for q=isbn:${isbnToSearch}:`, err);
       }
     }
 
     // STEP 2: Fallback to Open Library API with primary and alternative ISBN
     for (const isbnToSearch of targetIsbns) {
       const url = `https://openlibrary.org/api/books?bibkeys=ISBN:${isbnToSearch}&format=json&jscmd=data`;
-      console.log(`[bookService] Requesting Open Library API: ${url}`);
+      console.log(`[scan] [bookService] Requesting Open Library API: ${url}`);
 
       try {
         const olRes = await fetch(url);
-        if (olRes.ok) {
+        if (olRes && olRes.ok) {
           const olData = await olRes.json();
           const bookKey = `ISBN:${isbnToSearch}`;
           if (olData[bookKey]) {
-            console.log('[bookService] Book found in Open Library:', olData[bookKey].title);
+            console.log('[scan] [bookService] Book found in Open Library:', olData[bookKey].title);
             return formatOpenLibraryBook(olData[bookKey], primaryIsbn);
           } else {
-            console.log(`[bookService] Open Library returned no entry for ${bookKey}`);
+            console.log(`[scan] [bookService] Open Library returned no entry for ${bookKey}`);
           }
         }
       } catch (err) {
-        console.warn(`[bookService] Open Library API request failed for ${isbnToSearch}:`, err);
+        console.warn(`[scan] [bookService] Open Library API request failed for ${isbnToSearch}:`, err);
       }
     }
   }
@@ -203,23 +203,23 @@ export async function fetchBookByIsbn(rawIsbn, options = {}) {
 
   if (fallbackQuery) {
     const url = `https://www.googleapis.com/books/v1/volumes?q=${encodeURIComponent(fallbackQuery)}`;
-    console.log(`[bookService] Attempting general query fallback: ${url}`);
+    console.log(`[scan] [bookService] Attempting general query fallback: ${url}`);
 
     try {
       const fallbackRes = await fetch(url);
-      if (fallbackRes.ok) {
+      if (fallbackRes && fallbackRes.ok) {
         const fallbackData = await fallbackRes.json();
         if (fallbackData.items && fallbackData.items.length > 0) {
           const firstMatch = fallbackData.items[0];
-          console.log('[bookService] Book found via fallback query:', firstMatch.volumeInfo?.title);
+          console.log('[scan] [bookService] Book found via fallback query:', firstMatch.volumeInfo?.title);
           return formatGoogleBook(firstMatch, primaryIsbn || 'MANUAL-ENTRY');
         }
       }
     } catch (err) {
-      console.warn('[bookService] General query fallback failed:', err);
+      console.warn('[scan] [bookService] General query fallback failed:', err);
     }
   }
 
-  console.warn('[bookService] Book search completed: No book found for given criteria.');
+  console.warn('[scan] [bookService] Book search completed: No book found for given criteria.');
   return null;
 }

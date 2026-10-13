@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { Camera, BookOpen, Loader2, Library } from 'lucide-react';
 import ScannerModal from './components/ScannerModal';
 import BookCard from './components/BookCard';
@@ -22,7 +22,9 @@ export default function App() {
   const [isLoading, setIsLoading] = useState(false);
   const [statusMessage, setStatusMessage] = useState(null);
 
+  const booksRef = useRef(books);
   useEffect(() => {
+    booksRef.current = books;
     try {
       localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(books));
     } catch (e) {
@@ -30,20 +32,34 @@ export default function App() {
     }
   }, [books]);
 
-  const handleScanSuccess = async (scannedValue) => {
-    const rawVal = (scannedValue || '').trim();
-    if (!rawVal) return;
+  const handleCloseScanner = useCallback(() => {
+    setIsScannerOpen(false);
+  }, []);
 
+  const handleScanSuccess = useCallback(async (scannedValue, manualFallbackData = null) => {
+    const rawVal = (scannedValue || '').trim();
+    if (!rawVal && !manualFallbackData) return;
+
+    console.log('[scan] Processing scan result in App:', rawVal);
     setIsLoading(true);
-    setStatusMessage({ type: 'info', text: `Searching database for: ${rawVal}...` });
+    setStatusMessage({
+      type: 'info',
+      text: `Hledám knihu pro: ${rawVal || manualFallbackData?.title || ''}...`,
+    });
 
     try {
-      const bookData = await fetchBookByIsbn(rawVal, { title: rawVal });
+      let bookData = null;
+      if (manualFallbackData) {
+        bookData = manualFallbackData;
+      } else {
+        bookData = await fetchBookByIsbn(rawVal, { title: rawVal });
+      }
 
       if (bookData) {
         // Check if book already exists in library feed by ISBN or Title
         const newCleanIsbn = cleanIsbn(bookData.isbn);
-        const isDuplicate = books.some((existing) => {
+        const currentBooks = booksRef.current;
+        const isDuplicate = currentBooks.some((existing) => {
           const existingCleanIsbn = cleanIsbn(existing.isbn);
           if (newCleanIsbn && existingCleanIsbn && newCleanIsbn === existingCleanIsbn) {
             return true;
@@ -62,25 +78,28 @@ export default function App() {
         });
 
         if (isDuplicate) {
+          console.log('[scan] Duplicate book detected:', bookData.title);
           setStatusMessage({
             type: 'error',
-            text: `"${bookData.title}" is already in your library!`,
+            text: `Kniha "${bookData.title}" již je ve vaší knihovně!`,
           });
         } else {
+          console.log('[scan] Book added to library feed:', bookData.title);
           setBooks((prevBooks) => [bookData, ...prevBooks]);
-          setStatusMessage({ type: 'success', text: `Added "${bookData.title}" to your feed!` });
+          setStatusMessage({ type: 'success', text: `Kniha "${bookData.title}" byla přidána do knihovny!` });
         }
       } else {
+        console.warn('[scan] Book not found for query:', rawVal);
         setStatusMessage({
           type: 'error',
-          text: `Book "${rawVal}" was not found. Try scanning again or enter ISBN manually.`,
+          text: `Kniha "${rawVal}" nebyla nalezena. Zkuste skenovat znovu nebo zadejte údaje ručně.`,
         });
       }
     } catch (err) {
-      console.error('Error processing scanned input:', err);
+      console.error('[scan] Error processing scanned input:', err);
       setStatusMessage({
         type: 'error',
-        text: 'Failed to look up book details. Please check your internet connection.',
+        text: 'Chyba při vyhledávání knihy. Zkontrolujte prosím připojení k internetu.',
       });
     } finally {
       setIsLoading(false);
@@ -88,7 +107,7 @@ export default function App() {
         setStatusMessage(null);
       }, 5000);
     }
-  };
+  }, []);
 
   return (
     <div className="min-h-screen bg-gray-50 flex justify-center text-gray-900">
@@ -104,7 +123,7 @@ export default function App() {
             </h1>
           </div>
           <div className="text-xs text-gray-500 font-medium bg-gray-100 px-2.5 py-1 rounded-full">
-            {books.length} {books.length === 1 ? 'book' : 'books'}
+            {books.length} {books.length === 1 ? 'kniha' : books.length >= 2 && books.length <= 4 ? 'knihy' : 'knih'}
           </div>
         </header>
 
@@ -119,12 +138,12 @@ export default function App() {
             {isLoading ? (
               <>
                 <Loader2 className="w-5 h-5 animate-spin" />
-                <span>Searching Book...</span>
+                <span>Hledám knihu...</span>
               </>
             ) : (
               <>
                 <Camera className="w-5 h-5" />
-                <span>Scan a book</span>
+                <span>Naskenovat knihu</span>
               </>
             )}
           </button>
@@ -158,9 +177,9 @@ export default function App() {
               <div className="w-16 h-16 rounded-full bg-indigo-50 flex items-center justify-center text-indigo-500 mb-4">
                 <BookOpen className="w-8 h-8 stroke-1" />
               </div>
-              <h3 className="text-base font-semibold text-gray-800">No books scanned yet</h3>
+              <h3 className="text-base font-semibold text-gray-800">Zatím žádné naskenované knihy</h3>
               <p className="text-xs text-gray-500 max-w-xs mt-1">
-                Tap the "Scan a book" button above to scan a book's ISBN barcode and start your library feed.
+                Klepnutím na tlačítko "Naskenovat knihu" výše naskenujte čárový kód ISBN a přidejte knihu do knihovny.
               </p>
             </div>
           )}
@@ -169,7 +188,7 @@ export default function App() {
         {/* Camera Scanner Modal */}
         <ScannerModal
           isOpen={isScannerOpen}
-          onClose={() => setIsScannerOpen(false)}
+          onClose={handleCloseScanner}
           onScanSuccess={handleScanSuccess}
         />
       </div>
