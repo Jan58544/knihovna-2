@@ -142,10 +142,11 @@ export async function fetchBookByIsbn(rawIsbn, options = {}) {
   if (targetIsbns.length > 0) {
     for (const isbnToSearch of targetIsbns) {
       const url = `https://www.googleapis.com/books/v1/volumes?q=isbn:${isbnToSearch}`;
-      console.log(`[scan] [bookService] Requesting Google Books API: ${url}`);
+      console.log(`[scan] [bookService] Requesting API URL: ${url}`);
 
       try {
         const googleRes = await fetch(url);
+        console.log(`[scan] [bookService] API response status: ${googleRes ? googleRes.status : 'N/A'} for URL: ${url}`);
         if (googleRes && googleRes.ok) {
           const googleData = await googleRes.json();
           if (googleData.items && googleData.items.length > 0) {
@@ -158,23 +159,24 @@ export async function fetchBookByIsbn(rawIsbn, options = {}) {
                 return formatGoogleBook(item, primaryIsbn);
               }
             }
-            console.warn('[scan] [bookService] Google Books items did not match industryIdentifiers for ISBNs:', targetIsbns);
+            console.log('[scan] [bookService] Google Books items did not match industryIdentifiers for ISBNs:', targetIsbns);
           } else {
             console.log(`[scan] [bookService] Google Books returned 0 items for q=isbn:${isbnToSearch}`);
           }
         }
       } catch (err) {
-        console.warn(`[scan] [bookService] Google Books API request failed for q=isbn:${isbnToSearch}:`, err);
+        console.error(`[scan] [bookService] Error requesting URL: ${url}`, err);
       }
     }
 
     // STEP 2: Fallback to Open Library API with primary and alternative ISBN
     for (const isbnToSearch of targetIsbns) {
       const url = `https://openlibrary.org/api/books?bibkeys=ISBN:${isbnToSearch}&format=json&jscmd=data`;
-      console.log(`[scan] [bookService] Requesting Open Library API: ${url}`);
+      console.log(`[scan] [bookService] Requesting API URL: ${url}`);
 
       try {
         const olRes = await fetch(url);
+        console.log(`[scan] [bookService] API response status: ${olRes ? olRes.status : 'N/A'} for URL: ${url}`);
         if (olRes && olRes.ok) {
           const olData = await olRes.json();
           const bookKey = `ISBN:${isbnToSearch}`;
@@ -186,7 +188,7 @@ export async function fetchBookByIsbn(rawIsbn, options = {}) {
           }
         }
       } catch (err) {
-        console.warn(`[scan] [bookService] Open Library API request failed for ${isbnToSearch}:`, err);
+        console.error(`[scan] [bookService] Error requesting URL: ${url}`, err);
       }
     }
   }
@@ -203,10 +205,11 @@ export async function fetchBookByIsbn(rawIsbn, options = {}) {
 
   if (fallbackQuery) {
     const url = `https://www.googleapis.com/books/v1/volumes?q=${encodeURIComponent(fallbackQuery)}`;
-    console.log(`[scan] [bookService] Attempting general query fallback: ${url}`);
+    console.log(`[scan] [bookService] Requesting API URL (fallback query): ${url}`);
 
     try {
       const fallbackRes = await fetch(url);
+      console.log(`[scan] [bookService] API response status: ${fallbackRes ? fallbackRes.status : 'N/A'} for URL: ${url}`);
       if (fallbackRes && fallbackRes.ok) {
         const fallbackData = await fallbackRes.json();
         if (fallbackData.items && fallbackData.items.length > 0) {
@@ -216,7 +219,7 @@ export async function fetchBookByIsbn(rawIsbn, options = {}) {
         }
       }
     } catch (err) {
-      console.warn('[scan] [bookService] General query fallback failed:', err);
+      console.error(`[scan] [bookService] Error requesting URL: ${url}`, err);
     }
   }
 

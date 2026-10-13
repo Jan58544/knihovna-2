@@ -73,7 +73,7 @@ export default function ScannerModal({ isOpen, onClose, onScanSuccess }) {
         await html5Qrcode.start(
           { facingMode: 'environment' },
           config,
-          (decodedText) => {
+          (decodedText, result) => {
             const now = Date.now();
             // Debounce same or fast rapid detections for ~2 seconds
             if (scannedLockRef.current || (now - lastScannedTimeRef.current < 2000)) {
@@ -84,13 +84,14 @@ export default function ScannerModal({ isOpen, onClose, onScanSuccess }) {
             scannedLockRef.current = true;
             lastScannedTimeRef.current = now;
 
-            console.log('[scan] Code detected:', decodedText);
+            const formatName = result?.result?.format?.formatName || 'UNKNOWN';
+            console.log(`[scan] Code detected: "${decodedText}", format: ${formatName}`);
 
             const cleaned = cleanIsbn(decodedText);
             const valid = isValidIsbn(cleaned) || attemptOcrCorrection(decodedText);
             const valueToSend = valid || decodedText;
 
-            console.log(`[scan] ISBN recognized: ${valueToSend} (raw: ${decodedText})`);
+            console.log(`[scan] Normalized ISBN: ${cleaned || 'N/A'}, Final recognized: ${valueToSend} (raw: ${decodedText})`);
             setScanStatusInfo(`Kód detekován: ${decodedText} | ISBN rozpoznáno: ${valueToSend}`);
 
             // Safely stop scanner without blocking or losing onScanSuccess
