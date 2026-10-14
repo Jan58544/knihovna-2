@@ -40,6 +40,77 @@ describe('bookService', () => {
     );
   });
 
+  it('fetches book by valid ISBN-10 via Google Books API', async () => {
+    const mockGoogleResponse = {
+      ok: true,
+      json: async () => ({
+        items: [
+          {
+            volumeInfo: {
+              title: 'ISBN-10 Book',
+              authors: ['Author Ten'],
+              industryIdentifiers: [
+                { type: 'ISBN_10', identifier: '0306406152' },
+              ],
+            },
+          },
+        ],
+      }),
+    };
+
+    fetch.mockResolvedValueOnce(mockGoogleResponse);
+
+    const book = await fetchBookByIsbn('0306406152');
+    expect(book).not.toBeNull();
+    expect(book.title).toBe('ISBN-10 Book');
+  });
+
+  it('accepts volume with missing industryIdentifiers if returned by exact ISBN query', async () => {
+    const mockGoogleResponse = {
+      ok: true,
+      json: async () => ({
+        items: [
+          {
+            volumeInfo: {
+              title: 'Book Without Identifiers',
+              authors: ['Anonymous'],
+            },
+          },
+        ],
+      }),
+    };
+
+    fetch.mockResolvedValueOnce(mockGoogleResponse);
+
+    const book = await fetchBookByIsbn('9780306406157');
+    expect(book).not.toBeNull();
+    expect(book.title).toBe('Book Without Identifiers');
+  });
+
+  it('accepts volume with non-ISBN industryIdentifiers (e.g. OCLC)', async () => {
+    const mockGoogleResponse = {
+      ok: true,
+      json: async () => ({
+        items: [
+          {
+            volumeInfo: {
+              title: 'OCLC Book',
+              industryIdentifiers: [
+                { type: 'OTHER', identifier: 'OCLC:12345678' },
+              ],
+            },
+          },
+        ],
+      }),
+    };
+
+    fetch.mockResolvedValueOnce(mockGoogleResponse);
+
+    const book = await fetchBookByIsbn('9780306406157');
+    expect(book).not.toBeNull();
+    expect(book.title).toBe('OCLC Book');
+  });
+
   it('tries alternative ISBN-10 if ISBN-13 query returns no results', async () => {
     // 1st fetch (ISBN-13 query) returns no items
     fetch.mockResolvedValueOnce({
@@ -127,11 +198,16 @@ describe('bookService', () => {
     expect(book.authors).toBe('OL Author');
   });
 
+  it('returns null when book is not found in any external database', async () => {
+    fetch.mockResolvedValue({ ok: true, json: async () => ({ items: [] }) });
+
+    const book = await fetchBookByIsbn('9780306406157');
+    expect(book).toBeNull();
+  });
+
   it('performs title and author fallback search if options are provided', async () => {
-    // Google Books and Open Library fail
     fetch.mockResolvedValue({ ok: true, json: async () => ({}) });
 
-    // Fallback title/author query call
     fetch.mockImplementation((url) => {
       if (decodeURIComponent(url).includes('intitle:The Hobbit')) {
         return Promise.resolve({
@@ -209,6 +285,25 @@ describe('bookService', () => {
 
   it('handles network / fetch failure gracefully without crashing', async () => {
     fetch.mockRejectedValueOnce(new Error('Network error'));
+
+    const book = await fetchBookByIsbn('9780306406157');
+    expect(book).toBeNull();
+  });
+
+  it('handles HTTP 500 error gracefully without crashing', async () => {
+    fetch.mockResolvedValueOnce({ ok: false, status: 500 });
+    fetch.mockResolvedValue({ ok: true, json: async () => ({}) });
+
+    const book = await fetchBookByIsbn('9780306406157');
+    expect(book).toBeNull();
+  });
+
+  it('handles malformed JSON gracefully without crashing', async () => {
+    fetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => { throw new SyntaxError('Unexpected token'); },
+    });
+    fetch.mockResolvedValue({ ok: true, json: async () => ({}) });
 
     const book = await fetchBookByIsbn('9780306406157');
     expect(book).toBeNull();

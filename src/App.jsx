@@ -3,9 +3,46 @@ import { Camera, BookOpen, Loader2, Library } from 'lucide-react';
 import ScannerModal from './components/ScannerModal';
 import BookCard from './components/BookCard';
 import { fetchBookByIsbn } from './services/bookService';
-import { cleanIsbn } from './utils/isbnUtils';
+import { cleanIsbn, isbn10To13, isbn13To10 } from './utils/isbnUtils';
 
 const LOCAL_STORAGE_KEY = 'scanned_books_feed_v1';
+
+/**
+ * Checks if a candidate book is already in the library list.
+ */
+function isDuplicateBook(newBook, existingBooks) {
+  if (!newBook || !Array.isArray(existingBooks)) return false;
+
+  const newClean = cleanIsbn(newBook.isbn);
+  const newAlt = newClean.length === 10 ? isbn10To13(newClean) : (newClean.length === 13 ? isbn13To10(newClean) : null);
+  const newIsbns = [newClean, newAlt].filter(Boolean);
+
+  const newTitle = (newBook.title || '').trim().toLowerCase();
+  const newAuthors = (newBook.authors || '').trim().toLowerCase();
+
+  return existingBooks.some((existing) => {
+    const existingClean = cleanIsbn(existing.isbn);
+    const existingAlt = existingClean.length === 10 ? isbn10To13(existingClean) : (existingClean.length === 13 ? isbn13To10(existingClean) : null);
+    const existingIsbns = [existingClean, existingAlt].filter(Boolean);
+
+    // Check ISBN overlap
+    if (newIsbns.length > 0 && existingIsbns.length > 0) {
+      const hasIsbnMatch = newIsbns.some(isbn => existingIsbns.includes(isbn));
+      if (hasIsbnMatch) return true;
+    }
+
+    // Check Title & Author match
+    const existingTitle = (existing.title || '').trim().toLowerCase();
+    const existingAuthors = (existing.authors || '').trim().toLowerCase();
+    if (newTitle && existingTitle && newTitle === existingTitle) {
+      if (!newAuthors || !existingAuthors || newAuthors === existingAuthors) {
+        return true;
+      }
+    }
+
+    return false;
+  });
+}
 
 export default function App() {
   const [books, setBooks] = useState(() => {
@@ -19,6 +56,10 @@ export default function App() {
   });
 
   const [isScannerOpen, setIsScannerOpen] = useState(false);
+  const [scannerMode, setScannerMode] = useState('camera');
+  const [scannerInput, setScannerInput] = useState('');
+  const [scannerShowCustom, setScannerShowCustom] = useState(false);
+
   const [isLoading, setIsLoading] = useState(false);
   const [statusMessage, setStatusMessage] = useState(null);
 
@@ -34,6 +75,13 @@ export default function App() {
 
   const handleCloseScanner = useCallback(() => {
     setIsScannerOpen(false);
+  }, []);
+
+  const openScannerModal = useCallback((mode = 'camera', input = '', showCustom = false) => {
+    setScannerMode(mode);
+    setScannerInput(input);
+    setScannerShowCustom(showCustom);
+    setIsScannerOpen(true);
   }, []);
 
   const handleScanSuccess = useCallback(async (scannedValue, manualFallbackData = null) => {
@@ -52,32 +100,15 @@ export default function App() {
       if (manualFallbackData) {
         bookData = manualFallbackData;
       } else {
-        bookData = await fetchBookByIsbn(rawVal, { title: rawVal });
+        bookData = await fetchBookByIsbn(rawVal);
       }
 
       if (bookData) {
-        // Check if book already exists in library feed by ISBN or Title
-        const newCleanIsbn = cleanIsbn(bookData.isbn);
+        // Check if book already exists in library feed
         const currentBooks = booksRef.current;
-        const isDuplicate = currentBooks.some((existing) => {
-          const existingCleanIsbn = cleanIsbn(existing.isbn);
-          if (newCleanIsbn && existingCleanIsbn && newCleanIsbn === existingCleanIsbn) {
-            return true;
-          }
-          if (
-            existing.title &&
-            bookData.title &&
-            existing.title.trim().toLowerCase() === bookData.title.trim().toLowerCase() &&
-            existing.authors &&
-            bookData.authors &&
-            existing.authors.trim().toLowerCase() === bookData.authors.trim().toLowerCase()
-          ) {
-            return true;
-          }
-          return false;
-        });
+        const duplicate = isDuplicateBook(bookData, currentBooks);
 
-        if (isDuplicate) {
+        if (duplicate) {
           console.log('[scan] Duplicate book detected:', bookData.title);
           setStatusMessage({
             type: 'error',
@@ -93,6 +124,8 @@ export default function App() {
         setStatusMessage({
           type: 'error',
           text: `Kniha "${rawVal}" nebyla nalezena. Zkuste skenovat znovu nebo zadejte údaje ručně.`,
+          isNotFound: true,
+          lastQuery: rawVal,
         });
       }
     } catch (err) {
@@ -104,7 +137,7 @@ export default function App() {
     } finally {
       setIsLoading(false);
       setTimeout(() => {
-        setStatusMessage(null);
+        setStatusMessage((current) => (current?.type === 'info' ? null : current));
       }, 5000);
     }
   }, []);
@@ -131,7 +164,7 @@ export default function App() {
         <div className="px-4 py-4 bg-gradient-to-b from-gray-50 to-white border-b border-gray-100">
           <button
             type="button"
-            onClick={() => setIsScannerOpen(true)}
+            onClick={() => openScannerModal('camera')}
             disabled={isLoading}
             className="w-full py-3.5 px-4 bg-gradient-to-r from-indigo-600 via-purple-600 to-pink-600 text-white font-semibold rounded-xl shadow-md hover:opacity-95 active:scale-[0.99] transition-all flex items-center justify-center gap-2 disabled:opacity-50"
           >
@@ -151,7 +184,7 @@ export default function App() {
           {/* Status banner */}
           {statusMessage && (
             <div
-              className={`mt-3 px-3.5 py-2.5 rounded-lg text-xs font-medium text-center transition-all ${
+              className={`mt-3 px-3.5 py-2.5 rounded-lg text-xs font-medium text-center transition-all flex flex-col items-center gap-1.5 ${
                 statusMessage.type === 'success'
                   ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
                   : statusMessage.type === 'error'
@@ -159,7 +192,16 @@ export default function App() {
                   : 'bg-indigo-50 text-indigo-700 border border-indigo-200'
               }`}
             >
-              {statusMessage.text}
+              <span>{statusMessage.text}</span>
+              {statusMessage.isNotFound && (
+                <button
+                  type="button"
+                  onClick={() => openScannerModal('manual', statusMessage.lastQuery, true)}
+                  className="mt-1 px-3 py-1 bg-rose-600 text-white rounded-md text-xs font-semibold hover:bg-rose-500 transition-colors shadow-sm"
+                >
+                  Zadat název a autora ručně
+                </button>
+              )}
             </div>
           )}
         </div>
@@ -190,6 +232,9 @@ export default function App() {
           isOpen={isScannerOpen}
           onClose={handleCloseScanner}
           onScanSuccess={handleScanSuccess}
+          initialMode={scannerMode}
+          initialInput={scannerInput}
+          initialShowCustomFields={scannerShowCustom}
         />
       </div>
     </div>

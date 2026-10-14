@@ -1,14 +1,21 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useRef, useState, useCallback } from 'react';
 import { Html5Qrcode, Html5QrcodeSupportedFormats } from 'html5-qrcode';
 import { X, Camera, RefreshCw, Keyboard, Search, AlertCircle } from 'lucide-react';
 import { cleanIsbn, isValidIsbn, attemptOcrCorrection } from '../utils/isbnUtils';
 
-export default function ScannerModal({ isOpen, onClose, onScanSuccess }) {
-  const [mode, setMode] = useState('camera'); // 'camera' or 'manual'
-  const [manualInput, setManualInput] = useState('');
+export default function ScannerModal({
+  isOpen,
+  onClose,
+  onScanSuccess,
+  initialMode = 'camera',
+  initialInput = '',
+  initialShowCustomFields = false,
+}) {
+  const [mode, setMode] = useState(initialMode); // 'camera' or 'manual'
+  const [manualInput, setManualInput] = useState(initialInput);
   const [manualTitle, setManualTitle] = useState('');
   const [manualAuthor, setManualAuthor] = useState('');
-  const [showCustomFields, setShowCustomFields] = useState(false);
+  const [showCustomFields, setShowCustomFields] = useState(initialShowCustomFields);
   const [cameraError, setCameraError] = useState(null);
   const [manualError, setManualError] = useState(null);
   const [isInitializing, setIsInitializing] = useState(false);
@@ -16,6 +23,32 @@ export default function ScannerModal({ isOpen, onClose, onScanSuccess }) {
   const scannerRef = useRef(null);
   const scannedLockRef = useRef(false);
   const lastScannedTimeRef = useRef(0);
+
+  const prevIsOpenRef = useRef(isOpen);
+
+  useEffect(() => {
+    if (isOpen && !prevIsOpenRef.current) {
+      setMode(initialMode || 'camera');
+      setManualInput(initialInput || '');
+      setShowCustomFields(initialShowCustomFields || false);
+      setCameraError(null);
+      setManualError(null);
+      setManualTitle('');
+      setManualAuthor('');
+    }
+    prevIsOpenRef.current = isOpen;
+  }, [isOpen, initialMode, initialInput, initialShowCustomFields]);
+
+  const handleClose = useCallback(() => {
+    setManualInput('');
+    setManualTitle('');
+    setManualAuthor('');
+    setShowCustomFields(false);
+    setCameraError(null);
+    setManualError(null);
+    setMode('camera');
+    onClose();
+  }, [onClose]);
 
   useEffect(() => {
     if (!isOpen || mode !== 'camera') {
@@ -75,25 +108,39 @@ export default function ScannerModal({ isOpen, onClose, onScanSuccess }) {
           config,
           (decodedText, result) => {
             const now = Date.now();
-            // Debounce same or fast rapid detections for ~2 seconds
             if (scannedLockRef.current || (now - lastScannedTimeRef.current < 2000)) {
               console.log('[scan] Debouncing rapid scan event:', decodedText);
+              return;
+            }
+
+            const formatName = result?.result?.format?.formatName || 'UNKNOWN';
+            console.log(`[scan] Code detected: "${decodedText}", format: ${formatName}`);
+
+            const cleaned = cleanIsbn(decodedText);
+            let validIsbn = null;
+
+            if (isValidIsbn(cleaned)) {
+              validIsbn = cleaned;
+            } else {
+              const corrected = attemptOcrCorrection(decodedText);
+              if (corrected && isValidIsbn(corrected)) {
+                validIsbn = corrected;
+              }
+            }
+
+            if (!validIsbn) {
+              console.warn('[scan] Invalid ISBN scanned:', decodedText);
+              setScanStatusInfo(`Neplatné ISBN: ${decodedText}`);
+              setCameraError(`Naskenovaný kód "${decodedText}" není platné ISBN. Zkontrolujte kód nebo zadejte údaje ručně.`);
               return;
             }
 
             scannedLockRef.current = true;
             lastScannedTimeRef.current = now;
 
-            const formatName = result?.result?.format?.formatName || 'UNKNOWN';
-            console.log(`[scan] Code detected: "${decodedText}", format: ${formatName}`);
+            console.log(`[scan] Normalized ISBN: ${cleaned || 'N/A'}, Recognized: ${validIsbn} (raw: ${decodedText})`);
+            setScanStatusInfo(`Kód detekován: ${decodedText} | ISBN: ${validIsbn}`);
 
-            const cleaned = cleanIsbn(decodedText);
-            const valueToSend = attemptOcrCorrection(decodedText) || decodedText;
-
-            console.log(`[scan] Normalized ISBN: ${cleaned || 'N/A'}, Final recognized: ${valueToSend} (raw: ${decodedText})`);
-            setScanStatusInfo(`Kód detekován: ${decodedText} | ISBN rozpoznáno: ${valueToSend}`);
-
-            // Safely stop scanner without blocking or losing onScanSuccess
             const instance = scannerRef.current;
             if (instance && instance.isScanning) {
               instance
@@ -111,9 +158,8 @@ export default function ScannerModal({ isOpen, onClose, onScanSuccess }) {
                 });
             }
 
-            // Immediately notify parent & close modal so result is never lost or blocked
-            onScanSuccess(valueToSend);
-            onClose();
+            onScanSuccess(validIsbn);
+            handleClose();
           },
           () => {}
         );
@@ -147,18 +193,7 @@ export default function ScannerModal({ isOpen, onClose, onScanSuccess }) {
         });
       }
     };
-  }, [isOpen, mode, onClose, onScanSuccess]);
-
-  const handleClose = () => {
-    setManualInput('');
-    setManualTitle('');
-    setManualAuthor('');
-    setShowCustomFields(false);
-    setCameraError(null);
-    setManualError(null);
-    setMode('camera');
-    onClose();
-  };
+  }, [isOpen, mode, onClose, onScanSuccess, handleClose]);
 
   const handleManualSubmit = (e) => {
     e.preventDefault();
@@ -196,11 +231,19 @@ export default function ScannerModal({ isOpen, onClose, onScanSuccess }) {
     const cleaned = cleanIsbn(trimmed);
     const isPureCode = /^[0-9X\- ]+$/i.test(trimmed);
 
+    let valueToSend = trimmed;
     if (isPureCode) {
-      if (!isValidIsbn(cleaned) && !attemptOcrCorrection(trimmed)) {
-        setManualError('Neplatné ISBN. Zkontrolujte kód nebo zvolte ruční zadání názvu níže.');
-        setShowCustomFields(true);
-        return;
+      if (isValidIsbn(cleaned)) {
+        valueToSend = cleaned;
+      } else {
+        const corrected = attemptOcrCorrection(trimmed);
+        if (corrected && isValidIsbn(corrected)) {
+          valueToSend = corrected;
+        } else {
+          setManualError('Neplatné ISBN. Zkontrolujte kód nebo zvolte ruční zadání názvu níže.');
+          setShowCustomFields(true);
+          return;
+        }
       }
     }
 
@@ -208,7 +251,7 @@ export default function ScannerModal({ isOpen, onClose, onScanSuccess }) {
       scannerRef.current.stop().catch(() => {});
     }
 
-    onScanSuccess(trimmed);
+    onScanSuccess(valueToSend);
     handleClose();
   };
 
@@ -282,7 +325,7 @@ export default function ScannerModal({ isOpen, onClose, onScanSuccess }) {
                   onClick={() => setMode('manual')}
                   className="mt-3 px-4 py-2 bg-indigo-600 text-white font-medium rounded-lg text-xs hover:bg-indigo-500 transition-colors"
                 >
-                  Zadyt ISBN ručně
+                  Zadejte ISBN ručně
                 </button>
               </div>
             ) : (

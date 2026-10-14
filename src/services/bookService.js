@@ -8,28 +8,64 @@ import {
 
 /**
  * Helper to check if a Google Books volume matches expected ISBNs.
+ * - Collects all target ISBNs and their converted equivalents (ISBN-10 <-> ISBN-13).
+ * - Collects all valid or 10/13 digit ISBN identifiers from the volume's industryIdentifiers.
+ * - If volume has NO 10/13 digit ISBN identifiers listed (missing/empty or only non-ISBN identifiers), it is considered safe (matches).
+ * - If volume HAS ISBN identifiers listed, at least one must match the target set. Otherwise it's rejected as a demonstrably different ISBN.
+ *
  * @param {Object} volumeInfo
  * @param {Array<string>} targetIsbns
  * @returns {boolean}
  */
 function isVolumeMatchingIsbn(volumeInfo, targetIsbns) {
   if (!volumeInfo) return false;
-  const identifiers = volumeInfo.industryIdentifiers || [];
-  const cleanTargets = targetIsbns.map(isbn => cleanIsbn(isbn)).filter(Boolean);
 
-  if (identifiers.length > 0) {
-    for (const item of identifiers) {
-      const cleanedId = cleanIsbn(item.identifier);
-      if (cleanTargets.includes(cleanedId)) {
-        return true;
-      }
+  // Build target set including conversions
+  const targetSet = new Set();
+  for (const raw of targetIsbns) {
+    const cleaned = cleanIsbn(raw);
+    if (!cleaned) continue;
+    targetSet.add(cleaned);
+    if (cleaned.length === 10) {
+      const alt = isbn10To13(cleaned);
+      if (alt) targetSet.add(alt);
+    } else if (cleaned.length === 13) {
+      const alt = isbn13To10(cleaned);
+      if (alt) targetSet.add(alt);
     }
-    // Identifiers exist but none matched target ISBNs
-    return false;
   }
 
-  // If no identifiers present on volumeInfo, assume true if it was returned by exact isbn query
-  return true;
+  const identifiers = volumeInfo.industryIdentifiers || [];
+  const volumeIsbns = new Set();
+
+  for (const item of identifiers) {
+    const cleanedId = cleanIsbn(item.identifier);
+    if (cleanedId.length === 10 || cleanedId.length === 13) {
+      volumeIsbns.add(cleanedId);
+      if (cleanedId.length === 10) {
+        const alt = isbn10To13(cleanedId);
+        if (alt) volumeIsbns.add(alt);
+      } else if (cleanedId.length === 13) {
+        const alt = isbn13To10(cleanedId);
+        if (alt) volumeIsbns.add(alt);
+      }
+    }
+  }
+
+  // If no ISBN identifiers present on volumeInfo, accept if returned by exact query
+  if (volumeIsbns.size === 0) {
+    return true;
+  }
+
+  // Check if at least one ISBN on the volume matches our target set
+  for (const volIsbn of volumeIsbns) {
+    if (targetSet.has(volIsbn)) {
+      return true;
+    }
+  }
+
+  // Has ISBN identifiers but none matched target -> demonstrably different ISBN
+  return false;
 }
 
 /**
@@ -51,7 +87,7 @@ function formatGoogleBook(item, fallbackIsbn) {
     const isbn13 = info.industryIdentifiers.find(id => id.type === 'ISBN_13')?.identifier;
     const isbn10 = info.industryIdentifiers.find(id => id.type === 'ISBN_10')?.identifier;
     const found = cleanIsbn(isbn13 || isbn10 || '');
-    if (found) {
+    if (found && isValidIsbn(found)) {
       matchedIsbn = found;
     }
   }
@@ -81,6 +117,17 @@ function formatOpenLibraryBook(info, fallbackIsbn) {
   const coverUrl = info.cover?.large || info.cover?.medium || info.cover?.small || null;
   const cleanedFallback = cleanIsbn(fallbackIsbn);
 
+  let description = null;
+  if (typeof info.notes === 'string') {
+    description = info.notes;
+  } else if (info.notes && typeof info.notes.value === 'string') {
+    description = info.notes.value;
+  } else if (typeof info.description === 'string') {
+    description = info.description;
+  } else if (info.description && typeof info.description.value === 'string') {
+    description = info.description.value;
+  }
+
   return {
     id: `${cleanedFallback || 'BOOK'}-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
     isbn: cleanedFallback || fallbackIsbn || '',
@@ -88,7 +135,7 @@ function formatOpenLibraryBook(info, fallbackIsbn) {
     authors: authors,
     publisher: info.publishers ? info.publishers.map(p => p.name).join(', ') : null,
     publishedDate: info.publish_date || null,
-    description: typeof info.notes === 'string' ? info.notes : null,
+    description: description,
     pageCount: info.number_of_pages || null,
     coverUrl: coverUrl,
     scannedAt: new Date().toISOString(),
@@ -148,8 +195,14 @@ export async function fetchBookByIsbn(rawIsbn, options = {}) {
         const googleRes = await fetch(url);
         console.log(`[scan] [bookService] API response status: ${googleRes ? googleRes.status : 'N/A'} for URL: ${url}`);
         if (googleRes && googleRes.ok) {
-          const googleData = await googleRes.json();
-          if (googleData.items && googleData.items.length > 0) {
+          let googleData = null;
+          try {
+            googleData = await googleRes.json();
+          } catch (jsonErr) {
+            console.error(`[scan] [bookService] Invalid JSON received from ${url}`, jsonErr);
+          }
+
+          if (googleData && Array.isArray(googleData.items) && googleData.items.length > 0) {
             console.log(`[scan] [bookService] Google Books returned ${googleData.items.length} item(s). Verifying ISBN match...`);
 
             // Verify items against target ISBNs
@@ -178,13 +231,21 @@ export async function fetchBookByIsbn(rawIsbn, options = {}) {
         const olRes = await fetch(url);
         console.log(`[scan] [bookService] API response status: ${olRes ? olRes.status : 'N/A'} for URL: ${url}`);
         if (olRes && olRes.ok) {
-          const olData = await olRes.json();
-          const bookKey = `ISBN:${isbnToSearch}`;
-          if (olData[bookKey]) {
-            console.log('[scan] [bookService] Book found in Open Library:', olData[bookKey].title);
-            return formatOpenLibraryBook(olData[bookKey], primaryIsbn);
-          } else {
-            console.log(`[scan] [bookService] Open Library returned no entry for ${bookKey}`);
+          let olData = null;
+          try {
+            olData = await olRes.json();
+          } catch (jsonErr) {
+            console.error(`[scan] [bookService] Invalid JSON received from Open Library: ${url}`, jsonErr);
+          }
+
+          if (olData && typeof olData === 'object') {
+            const bookKey = `ISBN:${isbnToSearch}`;
+            if (olData[bookKey]) {
+              console.log('[scan] [bookService] Book found in Open Library:', olData[bookKey].title);
+              return formatOpenLibraryBook(olData[bookKey], primaryIsbn);
+            } else {
+              console.log(`[scan] [bookService] Open Library returned no entry for ${bookKey}`);
+            }
           }
         }
       } catch (err) {
@@ -195,7 +256,7 @@ export async function fetchBookByIsbn(rawIsbn, options = {}) {
 
   // STEP 3: Fallback to general term / title / author search
   const searchTerms = [];
-  if (options.title) searchTerms.push(`intitle:${options.title}`);
+  if (options.title && options.title !== rawIsbn) searchTerms.push(`intitle:${options.title}`);
   if (options.author) searchTerms.push(`inauthor:${options.author}`);
 
   let fallbackQuery = searchTerms.join(' ');
@@ -211,8 +272,13 @@ export async function fetchBookByIsbn(rawIsbn, options = {}) {
       const fallbackRes = await fetch(url);
       console.log(`[scan] [bookService] API response status: ${fallbackRes ? fallbackRes.status : 'N/A'} for URL: ${url}`);
       if (fallbackRes && fallbackRes.ok) {
-        const fallbackData = await fallbackRes.json();
-        if (fallbackData.items && fallbackData.items.length > 0) {
+        let fallbackData = null;
+        try {
+          fallbackData = await fallbackRes.json();
+        } catch {
+          /* ignore JSON error */
+        }
+        if (fallbackData && Array.isArray(fallbackData.items) && fallbackData.items.length > 0) {
           const firstMatch = fallbackData.items[0];
           console.log('[scan] [bookService] Book found via fallback query:', firstMatch.volumeInfo?.title);
           return formatGoogleBook(firstMatch, primaryIsbn || 'MANUAL-ENTRY');
