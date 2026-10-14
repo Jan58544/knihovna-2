@@ -88,8 +88,7 @@ export default function ScannerModal({ isOpen, onClose, onScanSuccess }) {
             console.log(`[scan] Code detected: "${decodedText}", format: ${formatName}`);
 
             const cleaned = cleanIsbn(decodedText);
-            const valid = isValidIsbn(cleaned) || attemptOcrCorrection(decodedText);
-            const valueToSend = valid || decodedText;
+            const valueToSend = attemptOcrCorrection(decodedText) || decodedText;
 
             console.log(`[scan] Normalized ISBN: ${cleaned || 'N/A'}, Final recognized: ${valueToSend} (raw: ${decodedText})`);
             setScanStatusInfo(`Kód detekován: ${decodedText} | ISBN rozpoznáno: ${valueToSend}`);
