@@ -4,6 +4,7 @@ import ScannerModal from './components/ScannerModal';
 import BookCard from './components/BookCard';
 import { fetchBookByIsbn } from './services/bookService';
 import { cleanIsbn, isbn10To13, isbn13To10 } from './utils/isbnUtils';
+import { groupBooksByGenre } from './utils/genres';
 
 const LOCAL_STORAGE_KEY = 'scanned_books_feed_v1';
 
@@ -27,7 +28,7 @@ function isDuplicateBook(newBook, existingBooks) {
 
     // Check ISBN overlap
     if (newIsbns.length > 0 && existingIsbns.length > 0) {
-      const hasIsbnMatch = newIsbns.some(isbn => existingIsbns.includes(isbn));
+      const hasIsbnMatch = newIsbns.some((isbn) => existingIsbns.includes(isbn));
       if (hasIsbnMatch) return true;
     }
 
@@ -82,6 +83,12 @@ export default function App() {
     setScannerInput(input);
     setScannerShowCustom(showCustom);
     setIsScannerOpen(true);
+  }, []);
+
+  const handleUpdateBookGenre = useCallback((bookId, newGenre) => {
+    setBooks((prevBooks) =>
+      prevBooks.map((b) => (b.id === bookId ? { ...b, genre: newGenre } : b))
+    );
   }, []);
 
   const handleScanSuccess = useCallback(async (scannedValue, manualFallbackData = null) => {
@@ -141,6 +148,8 @@ export default function App() {
       }, 5000);
     }
   }, []);
+
+  const groupedBooks = groupBooksByGenre(books);
 
   return (
     <div className="min-h-screen bg-gray-50 flex justify-center text-gray-900">
@@ -206,12 +215,27 @@ export default function App() {
           )}
         </div>
 
-        {/* Book Feed directly below "Scan a book" button */}
+        {/* Book Feed grouped by genre */}
         <main className="flex-1 bg-gray-100 p-0 sm:p-2 overflow-y-auto">
-          {books.length > 0 ? (
-            <div className="space-y-0 sm:space-y-2">
-              {books.map((book) => (
-                <BookCard key={book.id} book={book} />
+          {groupedBooks.length > 0 ? (
+            <div className="space-y-4">
+              {groupedBooks.map(({ genre, books: genreBooks }) => (
+                <section key={genre} className="bg-gray-100 rounded-lg">
+                  <div className="sticky top-0 z-20 bg-gray-100/95 backdrop-blur-xs px-4 py-2 border-b border-gray-200 flex items-center justify-between">
+                    <h2 className="text-sm font-bold text-gray-800 tracking-wide uppercase flex items-center gap-1.5">
+                      <span>{genre}</span>
+                    </h2>
+                    <span className="text-xs font-semibold text-indigo-700 bg-indigo-100 px-2 py-0.5 rounded-full">
+                      {genreBooks.length} {genreBooks.length === 1 ? 'kniha' : genreBooks.length >= 2 && genreBooks.length <= 4 ? 'knihy' : 'knih'}
+                    </span>
+                  </div>
+
+                  <div className="space-y-0 sm:space-y-2 mt-2">
+                    {genreBooks.map((book) => (
+                      <BookCard key={book.id} book={book} onUpdateGenre={handleUpdateBookGenre} />
+                    ))}
+                  </div>
+                </section>
               ))}
             </div>
           ) : (

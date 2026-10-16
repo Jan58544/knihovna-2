@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState, useCallback } from 'react';
 import { Html5Qrcode, Html5QrcodeSupportedFormats } from 'html5-qrcode';
 import { X, Camera, RefreshCw, Keyboard, Search, AlertCircle } from 'lucide-react';
 import { cleanIsbn, isValidIsbn, attemptOcrCorrection } from '../utils/isbnUtils';
+import { GENRES_LIST, detectGenre } from '../utils/genres';
 
 export default function ScannerModal({
   isOpen,
@@ -15,6 +16,7 @@ export default function ScannerModal({
   const [manualInput, setManualInput] = useState(initialInput);
   const [manualTitle, setManualTitle] = useState('');
   const [manualAuthor, setManualAuthor] = useState('');
+  const [manualGenre, setManualGenre] = useState('');
   const [showCustomFields, setShowCustomFields] = useState(initialShowCustomFields);
   const [cameraError, setCameraError] = useState(null);
   const [manualError, setManualError] = useState(null);
@@ -62,6 +64,7 @@ export default function ScannerModal({
       setManualError(null);
       setManualTitle('');
       setManualAuthor('');
+      setManualGenre('');
     }
     prevIsOpenRef.current = isOpen;
   }, [isOpen, initialMode, initialInput, initialShowCustomFields]);
@@ -71,6 +74,7 @@ export default function ScannerModal({
     setManualInput('');
     setManualTitle('');
     setManualAuthor('');
+    setManualGenre('');
     setShowCustomFields(false);
     setCameraError(null);
     setManualError(null);
@@ -207,6 +211,7 @@ export default function ScannerModal({
         isbn: cleanIsbn(trimmed) || trimmed || '',
         title: manualTitle.trim(),
         authors: manualAuthor.trim() || 'Neznámý autor',
+        genre: manualGenre || detectGenre({ title: manualTitle.trim(), authors: manualAuthor.trim() }),
         publisher: null,
         publishedDate: null,
         description: null,
@@ -397,6 +402,24 @@ export default function ScannerModal({
                       onChange={(e) => setManualAuthor(e.target.value)}
                       className="w-full px-3 py-2 bg-neutral-900 border border-neutral-800 rounded-lg text-white text-sm focus:outline-none focus:border-indigo-500"
                     />
+                  </div>
+                  <div>
+                    <label htmlFor="manualGenreSelect" className="block text-xs font-medium text-neutral-300 mb-1">
+                      Žánr (volitelné)
+                    </label>
+                    <select
+                      id="manualGenreSelect"
+                      value={manualGenre}
+                      onChange={(e) => setManualGenre(e.target.value)}
+                      className="w-full px-3 py-2 bg-neutral-900 border border-neutral-800 rounded-lg text-white text-sm focus:outline-none focus:border-indigo-500"
+                    >
+                      <option value="">-- Automatické rozpoznání --</option>
+                      {GENRES_LIST.map((g) => (
+                        <option key={g} value={g}>
+                          {g}
+                        </option>
+                      ))}
+                    </select>
                   </div>
                 </div>
               ) : (
