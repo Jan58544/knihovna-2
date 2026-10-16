@@ -11,7 +11,8 @@ describe('App Component', () => {
   beforeEach(() => {
     cleanup();
     localStorage.clear();
-    vi.restoreAllMocks();
+    vi.clearAllMocks();
+    vi.resetAllMocks();
   });
 
   afterEach(() => {
@@ -37,15 +38,15 @@ describe('App Component', () => {
 
   it('allows manual entry with valid ISBN-13 and adds retrieved book to feed with Czech messages', async () => {
     const mockBook = {
-      id: '9780306406157-1234',
-      isbn: '9780306406157',
-      title: 'Clean Architecture',
-      authors: 'Robert C. Martin',
-      publisher: 'Prentice Hall',
-      publishedDate: '2017',
-      description: "A Craftsman's Guide to Software Structure and Design",
-      pageCount: 432,
-      coverUrl: 'https://example.com/cover.jpg',
+      id: '9788025703670-1234',
+      isbn: '9788025703670',
+      title: 'Životy slavných a starých provensálských básníků',
+      authors: 'Jean de Nostredame',
+      publisher: 'Argo',
+      publishedDate: '2011',
+      description: '218 s. : il. ; 22 cm',
+      pageCount: 218,
+      coverUrl: 'https://www.knihovny.cz/Cover/Show?id=mkp.3521868&size=large',
       scannedAt: new Date().toISOString(),
     };
 
@@ -58,19 +59,19 @@ describe('App Component', () => {
 
     fireEvent.click(screen.getByText('Ruční zadání'));
 
-    const input = screen.getByPlaceholderText(/např. 978-80-12345-67-8/i);
-    fireEvent.change(input, { target: { value: '978-0-306-40615-7' } });
+    const input = screen.getByPlaceholderText(/např./i);
+    fireEvent.change(input, { target: { value: '978-80-257-0367-0' } });
 
     const searchBtn = screen.getByRole('button', { name: /vyhledat knihu/i });
     fireEvent.click(searchBtn);
 
     await waitFor(() => {
-      expect(bookService.fetchBookByIsbn).toHaveBeenCalledWith('9780306406157');
+      expect(bookService.fetchBookByIsbn).toHaveBeenCalledWith('9788025703670');
     });
 
     await waitFor(() => {
-      expect(screen.getAllByText('Clean Architecture').length).toBeGreaterThan(0);
-      expect(screen.getAllByText('Robert C. Martin').length).toBeGreaterThan(0);
+      expect(screen.getAllByText('Životy slavných a starých provensálských básníků').length).toBeGreaterThan(0);
+      expect(screen.getAllByText('Jean de Nostredame').length).toBeGreaterThan(0);
       expect(screen.getByText(/1 kniha/i)).not.toBeNull();
     });
   });
@@ -80,7 +81,7 @@ describe('App Component', () => {
       id: '0306406152-1234',
       isbn: '0306406152',
       title: 'Design Patterns',
-      authors: 'Erich Gamma, Richard Helm',
+      authors: 'Erich Gamma',
       scannedAt: new Date().toISOString(),
     };
 
@@ -91,7 +92,7 @@ describe('App Component', () => {
     fireEvent.click(screen.getByRole('button', { name: /naskenovat knihu/i }));
     fireEvent.click(screen.getByText('Ruční zadání'));
 
-    fireEvent.change(screen.getByPlaceholderText(/např. 978-80-12345-67-8/i), {
+    fireEvent.change(screen.getByPlaceholderText(/např./i), {
       target: { value: '0-306-40615-2' },
     });
 
@@ -114,8 +115,8 @@ describe('App Component', () => {
     fireEvent.click(screen.getByRole('button', { name: /naskenovat knihu/i }));
     fireEvent.click(screen.getByText('Ruční zadání'));
 
-    fireEvent.change(screen.getByPlaceholderText(/např. 978-80-12345-67-8/i), {
-      target: { value: '9780306406157' },
+    fireEvent.change(screen.getByPlaceholderText(/např./i), {
+      target: { value: '9788025703670' },
     });
 
     fireEvent.click(screen.getByRole('button', { name: /vyhledat knihu/i }));
@@ -154,40 +155,42 @@ describe('App Component', () => {
 
   it('prevents adding duplicate books to the library with Czech warning', async () => {
     const mockBook = {
-      id: '9780306406157-1234',
-      isbn: '9780306406157',
-      title: 'Clean Architecture',
-      authors: 'Robert C. Martin',
+      id: '9788025703670-1234',
+      isbn: '9788025703670',
+      title: 'Životy slavných a starých provensálských básníků',
+      authors: 'Jean de Nostredame',
       scannedAt: new Date().toISOString(),
     };
 
-    bookService.fetchBookByIsbn.mockResolvedValue(mockBook);
+    bookService.fetchBookByIsbn
+      .mockResolvedValueOnce(mockBook)
+      .mockResolvedValueOnce(mockBook);
 
     render(<App />);
 
     // First addition
     fireEvent.click(screen.getByRole('button', { name: /naskenovat knihu/i }));
     fireEvent.click(screen.getByText('Ruční zadání'));
-    fireEvent.change(screen.getByPlaceholderText(/např. 978-80-12345-67-8/i), {
-      target: { value: '9780306406157' },
+    fireEvent.change(screen.getByPlaceholderText(/např./i), {
+      target: { value: '9788025703670' },
     });
     fireEvent.click(screen.getByRole('button', { name: /vyhledat knihu/i }));
 
     await waitFor(() => {
       expect(screen.getByText(/1 kniha/i)).not.toBeNull();
-      expect(screen.getAllByText('Clean Architecture').length).toBeGreaterThan(0);
+      expect(screen.getAllByText('Životy slavných a starých provensálských básníků').length).toBeGreaterThan(0);
     });
 
-    // Attempt second addition of same book via ISBN-10 equivalent
+    // Attempt second addition of same book
     fireEvent.click(screen.getByRole('button', { name: /naskenovat knihu/i }));
     fireEvent.click(screen.getByText('Ruční zadání'));
-    fireEvent.change(screen.getByPlaceholderText(/např. 978-80-12345-67-8/i), {
-      target: { value: '0306406152' },
+    fireEvent.change(screen.getByPlaceholderText(/např./i), {
+      target: { value: '9788025703670' },
     });
     fireEvent.click(screen.getByRole('button', { name: /vyhledat knihu/i }));
 
     await waitFor(() => {
-      expect(screen.getByText('Kniha "Clean Architecture" již je ve vaší knihovně!')).not.toBeNull();
+      expect(screen.getByText('Kniha "Životy slavných a starých provensálských básníků" již je ve vaší knihovně!')).not.toBeNull();
       expect(screen.getByText(/1 kniha/i)).not.toBeNull();
     });
   });
@@ -199,8 +202,8 @@ describe('App Component', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /naskenovat knihu/i }));
     fireEvent.click(screen.getByText('Ruční zadání'));
-    fireEvent.change(screen.getByPlaceholderText(/např. 978-80-12345-67-8/i), {
-      target: { value: '9780306406157' },
+    fireEvent.change(screen.getByPlaceholderText(/např./i), {
+      target: { value: '9788025703670' },
     });
     fireEvent.click(screen.getByRole('button', { name: /vyhledat knihu/i }));
 

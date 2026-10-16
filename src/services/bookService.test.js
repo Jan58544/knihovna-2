@@ -1,7 +1,15 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { fetchBookByIsbn } from './bookService';
+import {
+  fetchBookByIsbn,
+  stripCatalogPunctuation,
+  formatAuthorKey,
+  extractAuthors,
+  extractPublicationYear,
+  extractPageCount,
+  formatKnihovnyBook,
+} from './bookService';
 
-describe('bookService', () => {
+describe('bookService - Knihovny.cz Integration', () => {
   beforeEach(() => {
     vi.stubGlobal('fetch', vi.fn());
   });
@@ -10,302 +18,257 @@ describe('bookService', () => {
     vi.restoreAllMocks();
   });
 
-  it('fetches book by valid ISBN-13 via Google Books API', async () => {
-    const mockGoogleResponse = {
+  const sampleKnihovnyResponse = {
+    resultCount: 1,
+    records: [
+      {
+        id: 'mkp.3521868',
+        title: 'Životy slavných a starých provensálských básníků, kteří žili v dobách hrabat z kraje Provença',
+        authors: {
+          primary: { 'Jean de Nostredame, asi 1507-1577': [] },
+          secondary: { 'Josef Prokop, 1971-': [], 'Vojtěch Domlátil, 1979-': [] },
+          corporate: [],
+        },
+        publishers: ['Argo,'],
+        placesOfPublication: ['Praha :'],
+        publicationDates: ['2011'],
+        physicalDescriptions: ['218 s. : il. ; 22 cm'],
+        isbns: ['978-80-257-0367-0'],
+        issns: [],
+        cnb: 'cnb002163342',
+        formats: ['0/BOOKS/'],
+      },
+    ],
+    status: 'OK',
+  };
+
+  it('fetches book by valid 13-digit ISBN via Knihovny.cz API and parses sample response', async () => {
+    fetch.mockResolvedValueOnce({
       ok: true,
-      json: async () => ({
-        items: [
-          {
-            volumeInfo: {
-              title: 'Test Book',
-              authors: ['Author One'],
-              industryIdentifiers: [
-                { type: 'ISBN_13', identifier: '9780306406157' },
-                { type: 'ISBN_10', identifier: '0306406152' },
-              ],
-            },
-          },
-        ],
-      }),
-    };
+      status: 200,
+      json: async () => sampleKnihovnyResponse,
+    });
 
-    fetch.mockResolvedValueOnce(mockGoogleResponse);
-
-    const book = await fetchBookByIsbn('978-0-306-40615-7');
+    const book = await fetchBookByIsbn('978-80-257-0367-0');
     expect(book).not.toBeNull();
-    expect(book.title).toBe('Test Book');
-    expect(book.authors).toBe('Author One');
-    expect(fetch).toHaveBeenCalledWith(
-      'https://www.googleapis.com/books/v1/volumes?q=isbn:9780306406157'
+    expect(book.id).toBe('mkp.3521868');
+    expect(book.title).toBe(
+      'Životy slavných a starých provensálských básníků, kteří žili v dobách hrabat z kraje Provença'
     );
+    expect(book.authors).toBe('Jean de Nostredame');
+    expect(book.publisher).toBe('Argo');
+    expect(book.publishedDate).toBe('2011');
+    expect(book.pageCount).toBe(218);
+    expect(book.cnb).toBe('cnb002163342');
+    expect(book.isbn).toBe('9788025703670');
+    expect(book.coverUrl).toBe('https://www.knihovny.cz/Cover/Show?id=mkp.3521868&size=large');
+
+    expect(fetch).toHaveBeenCalledTimes(1);
+    const calledUrl = fetch.mock.calls[0][0];
+    expect(calledUrl).toContain('https://www.knihovny.cz/api/v1/search?');
+    expect(calledUrl).toContain('lookfor=9788025703670');
+    expect(calledUrl).toContain('type=ISN');
+    expect(calledUrl).toContain('limit=10');
+    expect(calledUrl).toContain('field%5B%5D=id');
+    expect(calledUrl).toContain('field%5B%5D=title');
+    expect(calledUrl).toContain('field%5B%5D=authors');
   });
 
-  it('fetches book by valid ISBN-10 via Google Books API', async () => {
-    const mockGoogleResponse = {
+  it('converts 10-digit ISBN to 13-digit prior to querying Knihovny.cz API', async () => {
+    fetch.mockResolvedValueOnce({
       ok: true,
+      status: 200,
       json: async () => ({
-        items: [
+        resultCount: 1,
+        records: [
           {
-            volumeInfo: {
-              title: 'ISBN-10 Book',
-              authors: ['Author Ten'],
-              industryIdentifiers: [
-                { type: 'ISBN_10', identifier: '0306406152' },
-              ],
-            },
+            id: 'test.123',
+            title: 'Test Book',
+            authors: { primary: { 'Test Author, 1980-': [] } },
+            isbns: ['978-0-306-40615-7'],
+            formats: ['0/BOOKS/'],
           },
         ],
+        status: 'OK',
       }),
-    };
+    });
 
-    fetch.mockResolvedValueOnce(mockGoogleResponse);
-
+    // 0306406152 -> ISBN-13 is 9780306406157
     const book = await fetchBookByIsbn('0306406152');
     expect(book).not.toBeNull();
-    expect(book.title).toBe('ISBN-10 Book');
+    expect(book.title).toBe('Test Book');
+
+    const calledUrl = fetch.mock.calls[0][0];
+    expect(calledUrl).toContain('lookfor=9780306406157');
   });
 
-  it('accepts volume with missing industryIdentifiers if returned by exact ISBN query', async () => {
-    const mockGoogleResponse = {
-      ok: true,
-      json: async () => ({
-        items: [
-          {
-            volumeInfo: {
-              title: 'Book Without Identifiers',
-              authors: ['Anonymous'],
-            },
-          },
-        ],
-      }),
-    };
-
-    fetch.mockResolvedValueOnce(mockGoogleResponse);
-
-    const book = await fetchBookByIsbn('9780306406157');
-    expect(book).not.toBeNull();
-    expect(book.title).toBe('Book Without Identifiers');
-  });
-
-  it('accepts volume with non-ISBN industryIdentifiers (e.g. OCLC)', async () => {
-    const mockGoogleResponse = {
-      ok: true,
-      json: async () => ({
-        items: [
-          {
-            volumeInfo: {
-              title: 'OCLC Book',
-              industryIdentifiers: [
-                { type: 'OTHER', identifier: 'OCLC:12345678' },
-              ],
-            },
-          },
-        ],
-      }),
-    };
-
-    fetch.mockResolvedValueOnce(mockGoogleResponse);
-
-    const book = await fetchBookByIsbn('9780306406157');
-    expect(book).not.toBeNull();
-    expect(book.title).toBe('OCLC Book');
-  });
-
-  it('tries alternative ISBN-10 if ISBN-13 query returns no results', async () => {
-    // 1st fetch (ISBN-13 query) returns no items
+  it('handles resultCount: 0 with missing records property gracefully', async () => {
     fetch.mockResolvedValueOnce({
       ok: true,
-      json: async () => ({ items: [] }),
-    });
-
-    // 2nd fetch (ISBN-10 alternative query) returns matching item
-    fetch.mockResolvedValueOnce({
-      ok: true,
+      status: 200,
       json: async () => ({
-        items: [
-          {
-            volumeInfo: {
-              title: 'Alternative ISBN Match',
-              authors: ['Author Two'],
-              industryIdentifiers: [
-                { type: 'ISBN_10', identifier: '0306406152' },
-              ],
-            },
-          },
-        ],
+        resultCount: 0,
+        status: 'OK',
       }),
     });
 
-    const book = await fetchBookByIsbn('9780306406157');
-    expect(book).not.toBeNull();
-    expect(book.title).toBe('Alternative ISBN Match');
-    expect(fetch).toHaveBeenNthCalledWith(
-      1,
-      'https://www.googleapis.com/books/v1/volumes?q=isbn:9780306406157'
-    );
-    expect(fetch).toHaveBeenNthCalledWith(
-      2,
-      'https://www.googleapis.com/books/v1/volumes?q=isbn:0306406152'
-    );
-  });
-
-  it('rejects API results that return a book with non-matching ISBNs', async () => {
-    fetch.mockResolvedValueOnce({
-      ok: true,
-      json: async () => ({
-        items: [
-          {
-            volumeInfo: {
-              title: 'Wrong Book',
-              industryIdentifiers: [
-                { type: 'ISBN_13', identifier: '9781111111111' },
-              ],
-            },
-          },
-        ],
-      }),
-    });
-
-    // Mock subsequent calls (alt ISBN query and Open Library) to return no matches
-    fetch.mockResolvedValue({
-      ok: true,
-      json: async () => ({}),
-    });
-
-    const book = await fetchBookByIsbn('9780306406157');
+    const book = await fetchBookByIsbn('9788025703670');
     expect(book).toBeNull();
   });
 
-  it('falls back to Open Library when Google Books finds no match', async () => {
-    // Google Books primary and alt returns 0 items
-    fetch.mockResolvedValueOnce({ ok: true, json: async () => ({ items: [] }) });
-    fetch.mockResolvedValueOnce({ ok: true, json: async () => ({ items: [] }) });
-
-    // Open Library returns match
+  it('rejects records that do not contain the target ISBN in isbns array', async () => {
     fetch.mockResolvedValueOnce({
       ok: true,
+      status: 200,
       json: async () => ({
-        'ISBN:9780306406157': {
-          title: 'Open Library Book',
-          authors: [{ name: 'OL Author' }],
-        },
+        resultCount: 1,
+        records: [
+          {
+            id: 'other.123',
+            title: 'Different Edition',
+            isbns: ['978-1-111-11111-1'],
+          },
+        ],
+        status: 'OK',
       }),
     });
 
-    const book = await fetchBookByIsbn('9780306406157');
-    expect(book).not.toBeNull();
-    expect(book.title).toBe('Open Library Book');
-    expect(book.authors).toBe('OL Author');
-  });
-
-  it('returns null when book is not found in any external database', async () => {
-    fetch.mockResolvedValue({ ok: true, json: async () => ({ items: [] }) });
-
-    const book = await fetchBookByIsbn('9780306406157');
+    const book = await fetchBookByIsbn('9788025703670');
     expect(book).toBeNull();
   });
 
-  it('performs title and author fallback search if options are provided', async () => {
-    fetch.mockResolvedValue({ ok: true, json: async () => ({}) });
-
-    fetch.mockImplementation((url) => {
-      if (decodeURIComponent(url).includes('intitle:The Hobbit')) {
-        return Promise.resolve({
-          ok: true,
-          json: async () => ({
-            items: [
-              {
-                volumeInfo: {
-                  title: 'The Hobbit',
-                  authors: ['J.R.R. Tolkien'],
-                  industryIdentifiers: [{ type: 'ISBN_10', identifier: '0007458421' }],
-                },
-              },
-            ],
-          }),
-        });
-      }
-      return Promise.resolve({ ok: true, json: async () => ({}) });
-    });
-
-    const book = await fetchBookByIsbn('INVALID', { title: 'The Hobbit', author: 'Tolkien' });
-    expect(book).not.toBeNull();
-    expect(book.title).toBe('The Hobbit');
-    expect(book.authors).toBe('J.R.R. Tolkien');
-  });
-
-  it('corrects OCR errors like "O" instead of "0" before querying API', async () => {
+  it('performs fallback search by title and prefers "0/BOOKS/" format', async () => {
     fetch.mockResolvedValueOnce({
       ok: true,
+      status: 200,
       json: async () => ({
-        items: [
+        resultCount: 2,
+        records: [
           {
-            volumeInfo: {
-              title: 'OCR Corrected Book',
-              authors: ['OCR Author'],
-              industryIdentifiers: [{ type: 'ISBN_10', identifier: '0306406152' }],
-            },
+            id: 'audio.123',
+            title: 'Saturnin [zvukový záznam]',
+            formats: ['0/AUDIO/'],
+          },
+          {
+            id: 'book.123',
+            title: 'Saturnin',
+            authors: { primary: { 'Zdeněk Jirotka, 1911-2003': [] } },
+            formats: ['0/BOOKS/'],
           },
         ],
+        status: 'OK',
       }),
     });
 
-    const book = await fetchBookByIsbn('O306406152');
+    const book = await fetchBookByIsbn('Saturnin');
     expect(book).not.toBeNull();
-    expect(book.title).toBe('OCR Corrected Book');
-    expect(fetch).toHaveBeenCalledWith(
-      'https://www.googleapis.com/books/v1/volumes?q=isbn:0306406152'
-    );
+    expect(book.id).toBe('book.123');
+    expect(book.title).toBe('Saturnin');
+    expect(book.authors).toBe('Zdeněk Jirotka');
   });
 
-  it('performs title search when non-ISBN search string is supplied', async () => {
+  it('corrects OCR errors in ISBN before querying Knihovny.cz API', async () => {
     fetch.mockResolvedValueOnce({
       ok: true,
-      json: async () => ({
-        items: [
-          {
-            volumeInfo: {
-              title: 'Clean Code',
-              authors: ['Robert C. Martin'],
-              industryIdentifiers: [{ type: 'ISBN_13', identifier: '9780132350884' }],
-            },
-          },
-        ],
-      }),
+      status: 200,
+      json: async () => sampleKnihovnyResponse,
     });
 
-    const book = await fetchBookByIsbn('Clean Code');
+    // "O" replaced with "0" in valid ISBN
+    const book = await fetchBookByIsbn('97880257O3670');
     expect(book).not.toBeNull();
-    expect(book.title).toBe('Clean Code');
-    expect(book.authors).toBe('Robert C. Martin');
-    expect(fetch).toHaveBeenCalledWith(
-      'https://www.googleapis.com/books/v1/volumes?q=Clean%20Code'
-    );
+    const calledUrl = fetch.mock.calls[0][0];
+    expect(calledUrl).toContain('lookfor=9788025703670');
   });
 
-  it('handles network / fetch failure gracefully without crashing', async () => {
+  it('handles network failure gracefully without crashing', async () => {
     fetch.mockRejectedValueOnce(new Error('Network error'));
 
-    const book = await fetchBookByIsbn('9780306406157');
+    const book = await fetchBookByIsbn('9788025703670');
     expect(book).toBeNull();
   });
 
   it('handles HTTP 500 error gracefully without crashing', async () => {
     fetch.mockResolvedValueOnce({ ok: false, status: 500 });
-    fetch.mockResolvedValue({ ok: true, json: async () => ({}) });
 
-    const book = await fetchBookByIsbn('9780306406157');
+    const book = await fetchBookByIsbn('9788025703670');
     expect(book).toBeNull();
   });
 
   it('handles malformed JSON gracefully without crashing', async () => {
     fetch.mockResolvedValueOnce({
       ok: true,
-      json: async () => { throw new SyntaxError('Unexpected token'); },
+      status: 200,
+      json: async () => {
+        throw new SyntaxError('Unexpected token');
+      },
     });
-    fetch.mockResolvedValue({ ok: true, json: async () => ({}) });
 
-    const book = await fetchBookByIsbn('9780306406157');
+    const book = await fetchBookByIsbn('9788025703670');
     expect(book).toBeNull();
+  });
+
+  describe('Helper functions', () => {
+    it('stripCatalogPunctuation removes trailing punctuation', () => {
+      expect(stripCatalogPunctuation('Argo,')).toBe('Argo');
+      expect(stripCatalogPunctuation('Praha :')).toBe('Praha');
+      expect(stripCatalogPunctuation('[Praha] :')).toBe('[Praha]');
+      expect(stripCatalogPunctuation('Clean Code /')).toBe('Clean Code');
+    });
+
+    it('formatAuthorKey strips trailing years/dates', () => {
+      expect(formatAuthorKey('Jean de Nostredame, asi 1507-1577')).toBe('Jean de Nostredame');
+      expect(formatAuthorKey('Josef Prokop, 1971-')).toBe('Josef Prokop');
+      expect(formatAuthorKey('Karel Čapek, 1890-1938')).toBe('Karel Čapek');
+      expect(formatAuthorKey('Jan Novák')).toBe('Jan Novák');
+    });
+
+    it('extractAuthors formats primary and secondary author keys', () => {
+      const authors = {
+        primary: { 'Author One, 1980-': [] },
+        secondary: { 'Translator Two, 1985-': [] },
+      };
+      expect(extractAuthors(authors)).toBe('Author One');
+
+      const secondaryOnly = {
+        primary: {},
+        secondary: { 'Translator Two, 1985-': [] },
+      };
+      expect(extractAuthors(secondaryOnly)).toBe('Translator Two');
+    });
+
+    it('extractPublicationYear extracts 4-digit year', () => {
+      expect(extractPublicationYear(['2011'])).toBe('2011');
+      expect(extractPublicationYear(['c2010'])).toBe('2010');
+      expect(extractPublicationYear(['[2025]'])).toBe('2025');
+      expect(extractPublicationYear([])).toBeNull();
+    });
+
+    it('extractPageCount extracts integer page count', () => {
+      expect(extractPageCount(['218 s. : il. ; 22 cm'])).toBe(218);
+      expect(extractPageCount(['260 stran'])).toBe(260);
+      expect(extractPageCount([])).toBeNull();
+    });
+
+    it('formatKnihovnyBook formats record correctly', () => {
+      const record = {
+        id: 'mkp.123',
+        title: 'Kniha ,',
+        authors: { primary: { 'Autor, 1990-': [] } },
+        publishers: ['Nakladatel,'],
+        publicationDates: ['2020'],
+        physicalDescriptions: ['150 s.'],
+        isbns: ['978-80-12345-67-8'],
+        cnb: 'cnb12345',
+      };
+      const formatted = formatKnihovnyBook(record, '9788012345678');
+      expect(formatted.id).toBe('mkp.123');
+      expect(formatted.title).toBe('Kniha');
+      expect(formatted.authors).toBe('Autor');
+      expect(formatted.publisher).toBe('Nakladatel');
+      expect(formatted.publishedDate).toBe('2020');
+      expect(formatted.pageCount).toBe(150);
+      expect(formatted.cnb).toBe('cnb12345');
+    });
   });
 });
