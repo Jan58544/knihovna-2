@@ -72,7 +72,7 @@ describe('App Component', () => {
     await waitFor(() => {
       expect(screen.getAllByText('Životy slavných a starých provensálských básníků').length).toBeGreaterThan(0);
       expect(screen.getAllByText('Jean de Nostredame').length).toBeGreaterThan(0);
-      expect(screen.getByText(/1 kniha/i)).not.toBeNull();
+      expect(screen.getAllByText(/1 kniha/i).length).toBeGreaterThan(0);
     });
   });
 
@@ -177,7 +177,7 @@ describe('App Component', () => {
     fireEvent.click(screen.getByRole('button', { name: /vyhledat knihu/i }));
 
     await waitFor(() => {
-      expect(screen.getByText(/1 kniha/i)).not.toBeNull();
+      expect(screen.getAllByText(/1 kniha/i).length).toBeGreaterThan(0);
       expect(screen.getAllByText('Životy slavných a starých provensálských básníků').length).toBeGreaterThan(0);
     });
 
@@ -191,8 +191,62 @@ describe('App Component', () => {
 
     await waitFor(() => {
       expect(screen.getByText('Kniha "Životy slavných a starých provensálských básníků" již je ve vaší knihovně!')).not.toBeNull();
-      expect(screen.getByText(/1 kniha/i)).not.toBeNull();
+      expect(screen.getAllByText(/1 kniha/i).length).toBeGreaterThan(0);
     });
+  });
+
+  it('displays books categorized into genre sections and hides empty categories', async () => {
+    const mockFantasyBook = {
+      id: 'f1',
+      isbn: '9788025703670',
+      title: 'Hobit aneb Cesta tam a zase zpátky',
+      authors: 'J. R. R. Tolkien',
+      genre: 'Fantasy',
+      scannedAt: new Date().toISOString(),
+    };
+
+    const mockScifiBook = {
+      id: 's1',
+      isbn: '9788020401236',
+      title: 'Duna',
+      authors: 'Frank Herbert',
+      genre: 'Sci-fi',
+      scannedAt: new Date().toISOString(),
+    };
+
+    bookService.fetchBookByIsbn
+      .mockResolvedValueOnce(mockFantasyBook)
+      .mockResolvedValueOnce(mockScifiBook);
+
+    render(<App />);
+
+    // Add Fantasy book
+    fireEvent.click(screen.getByRole('button', { name: /naskenovat knihu/i }));
+    fireEvent.click(screen.getByText('Ruční zadání'));
+    fireEvent.change(screen.getByPlaceholderText(/např./i), { target: { value: '9788025703670' } });
+    fireEvent.click(screen.getByRole('button', { name: /vyhledat knihu/i }));
+
+    await waitFor(() => {
+      expect(screen.getAllByText('Hobit aneb Cesta tam a zase zpátky').length).toBeGreaterThan(0);
+    });
+
+    // Add Sci-fi book
+    fireEvent.click(screen.getByRole('button', { name: /naskenovat knihu/i }));
+    fireEvent.click(screen.getByText('Ruční zadání'));
+    fireEvent.change(screen.getByPlaceholderText(/např./i), { target: { value: '9788020401236' } });
+    fireEvent.click(screen.getByRole('button', { name: /vyhledat knihu/i }));
+
+    await waitFor(() => {
+      expect(screen.getAllByText('Duna').length).toBeGreaterThan(0);
+    });
+
+    // Verify genre section headers
+    expect(screen.getByRole('heading', { name: 'Fantasy' })).not.toBeNull();
+    expect(screen.getByRole('heading', { name: 'Sci-fi' })).not.toBeNull();
+
+    // Verify empty categories like 'Horor' or 'Detektivka' are NOT in document
+    expect(screen.queryByRole('heading', { name: 'Horor' })).toBeNull();
+    expect(screen.queryByRole('heading', { name: 'Detektivka' })).toBeNull();
   });
 
   it('handles API errors gracefully', async () => {

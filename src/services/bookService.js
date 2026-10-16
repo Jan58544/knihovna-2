@@ -4,6 +4,7 @@ import {
   attemptOcrCorrection,
   isbn10To13,
 } from '../utils/isbnUtils';
+import { detectGenre } from '../utils/genres';
 
 const KNIHOVNY_API_URL = 'https://www.knihovny.cz/api/v1/search';
 const REQUEST_FIELDS = [
@@ -18,6 +19,7 @@ const REQUEST_FIELDS = [
   'issns',
   'cnb',
   'formats',
+  'subjects',
 ];
 
 /**
@@ -138,7 +140,7 @@ export function formatKnihovnyBook(record, fallbackIsbn = '') {
     description = record.physicalDescriptions.join(', ');
   }
 
-  return {
+  const bookObj = {
     id: record.id || `${displayIsbn || 'BOOK'}-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
     isbn: displayIsbn,
     title: cleanTitle,
@@ -150,7 +152,12 @@ export function formatKnihovnyBook(record, fallbackIsbn = '') {
     coverUrl: coverUrl,
     scannedAt: new Date().toISOString(),
     cnb: record.cnb ?? null,
+    subjects: record.subjects || [],
+    formats: record.formats || [],
   };
+
+  bookObj.genre = detectGenre(bookObj);
+  return bookObj;
 }
 
 /**
