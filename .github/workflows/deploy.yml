@@ -25,7 +25,7 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 24
           cache: npm
 
       - name: Install dependencies
@@ -36,6 +36,9 @@ jobs:
 
       - name: Run tests
         run: npm test
+
+      - name: Configure GitHub Pages
+        uses: actions/configure-pages@v5
 
       - name: Build project
         run: npm run build
@@ -55,3 +58,9 @@ jobs:
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v4
+
+      - name: Show application link
+        env:
+          PAGE_URL: ${{ steps.deployment.outputs.page_url }}
+        run: |
+          printf '### Aplikace je nasazena\n\n[Otevřít aplikaci](%s)\n' "$PAGE_URL" >> "$GITHUB_STEP_SUMMARY"
