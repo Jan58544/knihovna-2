@@ -15,7 +15,7 @@ vi.mock('html5-qrcode', () => ({
     clear = camera.clear;
   },
 }));
-afterEach(() => { cleanup(); vi.resetAllMocks(); });
+afterEach(() => { cleanup(); vi.useRealTimers(); vi.resetAllMocks(); });
 
 describe('camera scanner', () => {
   it('restricts decoding, rejects altered codes, confirms a repeated ISBN, and ignores further callbacks', async () => {
@@ -52,6 +52,51 @@ describe('camera scanner', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Zkusit kameru znovu' }));
     await waitFor(() => expect(camera.start).toHaveBeenCalledTimes(2));
     await waitFor(() => expect(screen.queryByText(/Přístup ke kameře je zakázaný/)).toBeNull());
+  });
+
+  it('shows a dismissible warning after two seconds of scanning without stopping the camera', async () => {
+    vi.useFakeTimers();
+    render(<ScannerModal isOpen onClose={vi.fn()} onScanSuccess={vi.fn()} />);
+    await act(async () => { await vi.advanceTimersByTimeAsync(1); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(1998); });
+    expect(screen.queryByRole('alert')).toBeNull();
+    await act(async () => { await vi.advanceTimersByTimeAsync(2); });
+    expect(screen.getByRole('alert').textContent).toContain('Možnou příčinou');
+    fireEvent.click(screen.getByRole('button', { name: 'Zavřít upozornění' }));
+    expect(screen.queryByRole('alert')).toBeNull();
+    await act(async () => { await vi.advanceTimersByTimeAsync(4000); });
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(camera.stop).not.toHaveBeenCalled();
+  });
+
+  it('explains invalid ISBNs and cancels the warning after a confirmed scan', async () => {
+    vi.useFakeTimers();
+    const success = vi.fn();
+    render(<ScannerModal isOpen onClose={vi.fn()} onScanSuccess={success} />);
+    await act(async () => { await vi.advanceTimersByTimeAsync(1); });
+    const decode = camera.start.mock.calls[0][2];
+    act(() => decode('9788025703671'));
+    await act(async () => { await vi.advanceTimersByTimeAsync(2000); });
+    expect(screen.getByRole('alert').textContent).toContain('neprošel kontrolou ISBN');
+    act(() => decode('9788025703670'));
+    await act(async () => { await vi.advanceTimersByTimeAsync(50); });
+    act(() => decode('9788025703670'));
+    expect(success).toHaveBeenCalledExactlyOnceWith('9788025703670');
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+  it('does not show the timeout warning during camera permission prompts or after closing', async () => {
+    vi.useFakeTimers();
+    let finishStart;
+    camera.start.mockReturnValueOnce(new Promise(resolve => { finishStart = resolve; }));
+    const close = vi.fn(), success = vi.fn();
+    const { rerender } = render(<ScannerModal isOpen onClose={close} onScanSuccess={success} />);
+    await act(async () => { await vi.advanceTimersByTimeAsync(5000); });
+    expect(screen.queryByRole('alert')).toBeNull();
+    await act(async () => { finishStart(); });
+    rerender(<ScannerModal isOpen={false} onClose={close} onScanSuccess={success} />);
+    await act(async () => { await vi.advanceTimersByTimeAsync(3000); });
+    expect(screen.queryByRole('alert')).toBeNull();
   });
 
 });

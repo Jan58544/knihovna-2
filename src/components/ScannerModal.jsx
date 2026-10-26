@@ -22,6 +22,7 @@ export default function ScannerModal({
   const [manualGenre, setManualGenre] = useState('');
   const [showCustomFields, setShowCustomFields] = useState(initialShowCustomFields);
   const [cameraError, setCameraError] = useState(null);
+  const [scanWarning, setScanWarning] = useState(null);
   const [cameraAttempt, setCameraAttempt] = useState(0);
   const [manualError, setManualError] = useState(null);
   const [isInitializing, setIsInitializing] = useState(false);
@@ -93,12 +94,15 @@ export default function ScannerModal({
     }
 
     scannedLockRef.current = false;
+    let warningTimer;
+    let lastReadIssue = 'Kód se zatím nepodařilo rozpoznat. Možnou příčinou je neostrost, odlesk nebo kód mimo záběr. Zkuste změnit vzdálenost a osvětlení.';
     let isCancelled = false;
     let stopRobustScanner = () => {};
 
     const startScanner = async () => {
       try {
         setIsInitializing(true);
+        setScanWarning(null);
         setCameraError(null);
         setScanStatusInfo('Snímání...');
 
@@ -145,10 +149,15 @@ export default function ScannerModal({
 
           // Barcode reads are never OCR-corrected or stripped of unexpected characters.
           // Two matching reads guard against a single plausible but incorrect decode.
+          lastReadIssue = isValidIsbn(decodedText)
+            ? 'ISBN bylo zachyceno, ale zatím není potvrzené druhým shodným odečtem. Podržte kód chvíli v klidu před kamerou.'
+            : 'Načtený kód neprošel kontrolou ISBN. Může jít o jiný čárový kód nebo chybný odečet. Namiřte kameru na ISBN knihy a zkuste změnit vzdálenost.';
           const validIsbn = verifyScan(decodedText);
           if (!validIsbn) return;
 
           scannedLockRef.current = true;
+          clearTimeout(warningTimer);
+          setScanWarning(null);
           stopRobustScanner();
 
           setScanStatusInfo(`ISBN: ${validIsbn}`);
@@ -167,6 +176,11 @@ export default function ScannerModal({
 
         if (!isCancelled) {
           stopRobustScanner = startRobustScanner(element, handleDecode);
+          if (!scannedLockRef.current) {
+            warningTimer = setTimeout(() => {
+              if (!isCancelled && !scannedLockRef.current) setScanWarning(lastReadIssue);
+            }, 2000);
+          }
           // Optional camera controls must never prevent scanning on Safari or older devices.
           try {
             const capabilities = html5Qrcode.getRunningTrackCapabilities();
@@ -204,6 +218,7 @@ export default function ScannerModal({
     return () => {
       isCancelled = true;
       clearTimeout(timer);
+      clearTimeout(warningTimer);
       stopRobustScanner();
       safeStopScanner();
     };
@@ -334,6 +349,22 @@ export default function ScannerModal({
                 <div className="absolute inset-0 flex flex-col items-center justify-center text-neutral-400 gap-2 z-10 bg-black">
                   <RefreshCw className="w-8 h-8 animate-spin text-indigo-500" />
                   <p className="text-sm font-medium">Spouštění kamery...</p>
+                </div>
+              )}
+
+              {scanWarning && !cameraError && (
+                <div role="alert" className="absolute top-3 left-3 right-3 z-20 rounded-xl border border-rose-500/60 bg-neutral-950/95 p-4 pr-12 text-sm text-white shadow-xl">
+                  <button
+                    type="button"
+                    aria-label="Zavřít upozornění"
+                    onClick={() => setScanWarning(null)}
+                    className="absolute right-2 top-2 p-2 text-neutral-300 hover:text-white"
+                  >
+                    <X className="h-5 w-5" />
+                  </button>
+                  <p className="font-semibold text-rose-400 mb-2">ISBN se nedaří načíst déle než 2 sekundy</p>
+                  <p>{scanWarning}</p>
+                  <p className="mt-2 text-xs text-neutral-400">Skenování pokračuje. ISBN můžete zadat také ručně.</p>
                 </div>
               )}
 
