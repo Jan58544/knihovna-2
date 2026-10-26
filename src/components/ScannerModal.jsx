@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState, useCallback } from 'react';
 import { Html5Qrcode, Html5QrcodeSupportedFormats } from 'html5-qrcode';
 import { X, Camera, RefreshCw, Keyboard, Search, AlertCircle } from 'lucide-react';
 import { cleanIsbn, isValidIsbn, attemptOcrCorrection } from '../utils/isbnUtils';
+import { startRobustScanner } from '../utils/robustScanner';
 import { createIsbnScanVerifier } from '../utils/scanVerifier';
 import { GENRES_LIST, detectGenre } from '../utils/genres';
 
@@ -93,6 +94,7 @@ export default function ScannerModal({
 
     scannedLockRef.current = false;
     let isCancelled = false;
+    let stopRobustScanner = () => {};
 
     const startScanner = async () => {
       try {
@@ -138,29 +140,33 @@ export default function ScannerModal({
           }),
         };
 
+        const handleDecode = (decodedText) => {
+          if (isCancelled || scannedLockRef.current) return;
+
+          // Barcode reads are never OCR-corrected or stripped of unexpected characters.
+          // Two matching reads guard against a single plausible but incorrect decode.
+          const validIsbn = verifyScan(decodedText);
+          if (!validIsbn) return;
+
+          scannedLockRef.current = true;
+          stopRobustScanner();
+
+          setScanStatusInfo(`ISBN: ${validIsbn}`);
+
+          safeStopScanner();
+          onScanSuccess(validIsbn);
+          handleClose();
+        };
+
         await html5Qrcode.start(
           { facingMode: 'environment' },
           config,
-          (decodedText) => {
-            if (isCancelled || scannedLockRef.current) return;
-
-            // Barcode reads are never OCR-corrected or stripped of unexpected characters.
-            // Two matching reads guard against a single plausible but incorrect decode.
-            const validIsbn = verifyScan(decodedText);
-            if (!validIsbn) return;
-
-            scannedLockRef.current = true;
-
-            setScanStatusInfo(`ISBN: ${validIsbn}`);
-
-            safeStopScanner();
-            onScanSuccess(validIsbn);
-            handleClose();
-          },
+          handleDecode,
           () => {}
         );
 
         if (!isCancelled) {
+          stopRobustScanner = startRobustScanner(element, handleDecode);
           // Optional camera controls must never prevent scanning on Safari or older devices.
           try {
             const capabilities = html5Qrcode.getRunningTrackCapabilities();
@@ -198,6 +204,7 @@ export default function ScannerModal({
     return () => {
       isCancelled = true;
       clearTimeout(timer);
+      stopRobustScanner();
       safeStopScanner();
     };
   }, [isOpen, mode, onScanSuccess, handleClose, safeStopScanner, cameraAttempt, onScanCandidate]);

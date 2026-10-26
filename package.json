@@ -11,6 +11,7 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@zxing/library": "^0.21.3",
     "eruda": "^3.4.3",
     "react": "^19.2.8",
     "react-dom": "^19.2.8"
