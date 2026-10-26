@@ -3,15 +3,18 @@ export function startRobustScanner(container, onDecode) {
   let cancelled = false;
   let timer;
   let reader;
+  let zxing;
   const canvas = document.createElement('canvas');
   const tick = async () => {
     try {
       const video = container.querySelector('video');
       if (video?.readyState >= 2 && video.videoWidth && video.videoHeight) {
         if (!reader) {
-          const { BrowserMultiFormatReader, BarcodeFormat, DecodeHintType } = await import('@zxing/library');
+          zxing = await import('@zxing/library');
+          const { MultiFormatReader, BarcodeFormat, DecodeHintType } = zxing;
           if (cancelled) return;
-          reader = new BrowserMultiFormatReader(new Map([
+          reader = new MultiFormatReader();
+          reader.setHints(new Map([
             [DecodeHintType.POSSIBLE_FORMATS, [BarcodeFormat.EAN_13, BarcodeFormat.CODE_128]],
             [DecodeHintType.TRY_HARDER, true],
           ]));
@@ -22,7 +25,14 @@ export function startRobustScanner(container, onDecode) {
         canvas.height = Math.round(video.videoHeight * scale);
         const context = canvas.getContext('2d', { willReadFrequently: true });
         context.drawImage(video, 0, 0, canvas.width, canvas.height);
-        const result = reader.decodeFromCanvas(canvas);
+        const pixels = context.getImageData(0, 0, canvas.width, canvas.height).data;
+        const luminance = new Uint8ClampedArray(canvas.width * canvas.height);
+        for (let i = 0; i < luminance.length; i++) {
+          const offset = i * 4;
+          luminance[i] = (pixels[offset] + 2 * pixels[offset + 1] + pixels[offset + 2]) / 4;
+        }
+        const source = new zxing.RGBLuminanceSource(luminance, canvas.width, canvas.height);
+        const result = reader.decodeWithState(new zxing.BinaryBitmap(new zxing.HybridBinarizer(source)));
         if (!cancelled) onDecode(result.getText());
       }
     } catch {

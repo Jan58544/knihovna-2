@@ -1,44 +1,72 @@
 // @vitest-environment jsdom
 import { afterEach, expect, it, vi } from 'vitest';
+import { MultiFormatReader } from '@zxing/library';
 import { startRobustScanner } from './robustScanner';
 
-const decoder = vi.hoisted(() => ({ create: vi.fn(), decode: vi.fn() }));
-vi.mock('@zxing/library', () => ({
-  BarcodeFormat: { EAN_13: 7, CODE_128: 4 },
-  DecodeHintType: { POSSIBLE_FORMATS: 2, TRY_HARDER: 3 },
-  BrowserMultiFormatReader: class {
-    constructor(hints) { decoder.create(hints); }
-    decodeFromCanvas = decoder.decode;
-  },
-}));
-afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); vi.resetAllMocks(); });
+afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); });
 
-it('delays difficult-code processing, preserves camera detail, and retries unreadable frames', async () => {
+// EAN-13 symbol for 9788075551221, encoded using the standard left/right patterns.
+function barcodePixels(isbn) {
+  const left = ['0001101','0011001','0010011','0111101','0100011','0110001','0101111','0111011','0110111','0001011'];
+  const even = ['0100111','0110011','0011011','0100001','0011101','0111001','0000101','0010001','0001001','0010111'];
+  const parity = ['LLLLLL','LLGLGG','LLGGLG','LLGGGL','LGLLGG','LGGLLG','LGGGLL','LGLGLG','LGLGGL','LGGLGL'][Number(isbn[0])];
+  let bars = '000000000000101';
+  for (let i = 1; i <= 6; i++) bars += (parity[i-1] === 'L' ? left : even)[Number(isbn[i])];
+  bars += '01010';
+  for (let i = 7; i <= 12; i++) bars += left[Number(isbn[i])].replace(/[01]/g, bit => bit === '0' ? '1' : '0');
+  bars += '101000000000000';
+  const width = bars.length * 4, height = 160;
+  const pixels = new Uint8ClampedArray(width * height * 4).fill(255);
+  for (let y = 10; y < height - 10; y++) {
+    for (let x = 0; x < width; x++) {
+      if (bars[Math.floor(x / 4)] === '1') {
+        const offset = (y * width + x) * 4;
+        pixels[offset] = pixels[offset + 1] = pixels[offset + 2] = 0;
+      }
+    }
+  }
+  return { width, height, pixels };
+}
+
+it.each(['9788075551221', '9788090613805', '9781398518179'])('decodes a real EAN-13 pixel fixture for %s using the installed library', async isbn => {
   vi.useFakeTimers();
+  const { width, height, pixels } = barcodePixels(isbn);
   const drawImage = vi.fn();
-  vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue({ drawImage });
-  const video = { readyState: 4, videoWidth: 1280, videoHeight: 720 };
+  vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue({ drawImage, getImageData: () => ({ data: pixels }) });
+  const video = { readyState: 4, videoWidth: width, videoHeight: height };
   const onDecode = vi.fn();
-  decoder.decode.mockImplementationOnce(() => { throw new Error('No barcode'); })
-    .mockReturnValue({ getText: () => '9788025703670' });
   const stop = startRobustScanner({ querySelector: () => video }, onDecode);
   await vi.advanceTimersByTimeAsync(749);
-  expect(decoder.decode).not.toHaveBeenCalled();
-  await vi.advanceTimersByTimeAsync(1);
-  expect(drawImage).toHaveBeenCalledWith(video, 0, 0, 1280, 720);
-  expect(decoder.create).toHaveBeenCalledWith(new Map([[2, [7, 4]], [3, true]]));
   expect(onDecode).not.toHaveBeenCalled();
-  await vi.advanceTimersByTimeAsync(250);
-  expect(onDecode).toHaveBeenCalledExactlyOnceWith('9788025703670');
+  await vi.advanceTimersByTimeAsync(1);
+  expect(drawImage).toHaveBeenCalledWith(video, 0, 0, width, height);
+  expect(onDecode).toHaveBeenCalledExactlyOnceWith(isbn);
   stop();
   await vi.advanceTimersByTimeAsync(2000);
-  expect(decoder.decode).toHaveBeenCalledTimes(2);
+  expect(onDecode).toHaveBeenCalledTimes(1);
 });
 
-it('does not load or decode after the camera is closed', async () => {
+it('retries after an unreadable frame and stops on cleanup', async () => {
   vi.useFakeTimers();
-  const stop = startRobustScanner({ querySelector: vi.fn() }, vi.fn());
+  const decode = vi.spyOn(MultiFormatReader.prototype, 'decodeWithState')
+    .mockImplementationOnce(() => { throw new Error('No code'); })
+    .mockReturnValue({ getText: () => '9788075551221' });
+  vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue({ drawImage: vi.fn(), getImageData: () => ({ data: new Uint8ClampedArray(400) }) });
+  const onDecode = vi.fn();
+  const stop = startRobustScanner({ querySelector: () => ({ readyState: 4, videoWidth: 10, videoHeight: 10 }) }, onDecode);
+  await vi.advanceTimersByTimeAsync(750);
+  expect(onDecode).not.toHaveBeenCalled();
+  await vi.advanceTimersByTimeAsync(250);
+  expect(onDecode).toHaveBeenCalledExactlyOnceWith('9788075551221');
   stop();
   await vi.advanceTimersByTimeAsync(2000);
-  expect(decoder.create).not.toHaveBeenCalled();
+  expect(decode).toHaveBeenCalledTimes(2);
+});
+
+it('does not decode after closing before the delayed start', async () => {
+  vi.useFakeTimers();
+  const container = { querySelector: vi.fn() };
+  startRobustScanner(container, vi.fn())();
+  await vi.advanceTimersByTimeAsync(2000);
+  expect(container.querySelector).not.toHaveBeenCalled();
 });
