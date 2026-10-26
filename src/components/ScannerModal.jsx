@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState, useCallback } from 'react';
 import { Html5Qrcode, Html5QrcodeSupportedFormats } from 'html5-qrcode';
 import { X, Camera, RefreshCw, Keyboard, Search, AlertCircle } from 'lucide-react';
 import { cleanIsbn, isValidIsbn, attemptOcrCorrection } from '../utils/isbnUtils';
+import { createIsbnScanVerifier } from '../utils/scanVerifier';
 import { GENRES_LIST, detectGenre } from '../utils/genres';
 
 export default function ScannerModal({
@@ -26,7 +27,6 @@ export default function ScannerModal({
   const scannerRef = useRef(null);
   const isStoppingRef = useRef(false);
   const scannedLockRef = useRef(false);
-  const lastScannedTimeRef = useRef(0);
   const prevIsOpenRef = useRef(isOpen);
 
   // Helper to safely stop and clear scanner instance
@@ -110,58 +110,40 @@ export default function ScannerModal({
         await safeStopScanner();
         if (isCancelled) return;
 
-        const html5Qrcode = new Html5Qrcode('reader');
-        scannerRef.current = html5Qrcode;
-
-        const config = {
-          fps: 10,
-          qrbox: { width: 260, height: 180 },
+        const html5Qrcode = new Html5Qrcode('reader', {
           formatsToSupport: [
             Html5QrcodeSupportedFormats.EAN_13,
-            Html5QrcodeSupportedFormats.EAN_8,
-            Html5QrcodeSupportedFormats.UPC_A,
-            Html5QrcodeSupportedFormats.UPC_E,
             Html5QrcodeSupportedFormats.CODE_128,
           ],
+          useBarCodeDetectorIfSupported: true,
+          verbose: false,
+        });
+        scannerRef.current = html5Qrcode;
+        const verifyScan = createIsbnScanVerifier();
+
+        const config = {
+          fps: 24,
+          disableFlip: true,
+          qrbox: (width, height) => ({
+            width: Math.min(420, Math.floor(width * 0.9)),
+            height: Math.min(180, Math.floor(height * 0.65)),
+          }),
         };
 
         await html5Qrcode.start(
-          { facingMode: 'environment' },
+          { facingMode: 'environment', width: { ideal: 1280 }, height: { ideal: 720 } },
           config,
-          (decodedText, result) => {
-            const now = Date.now();
-            if (scannedLockRef.current || now - lastScannedTimeRef.current < 2000) {
-              console.log('[scan] Debouncing rapid scan event:', decodedText);
-              return;
-            }
+          (decodedText) => {
+            if (isCancelled || scannedLockRef.current) return;
 
-            const formatName = result?.result?.format?.formatName || 'UNKNOWN';
-            console.log(`[scan] Code detected: "${decodedText}", format: ${formatName}`);
-
-            const cleaned = cleanIsbn(decodedText);
-            let validIsbn = null;
-
-            if (isValidIsbn(cleaned)) {
-              validIsbn = cleaned;
-            } else {
-              const corrected = attemptOcrCorrection(decodedText);
-              if (corrected && isValidIsbn(corrected)) {
-                validIsbn = corrected;
-              }
-            }
-
-            if (!validIsbn) {
-              console.warn('[scan] Invalid ISBN scanned:', decodedText);
-              setScanStatusInfo(`Neplatné ISBN: ${decodedText}`);
-              setCameraError(`Naskenovaný kód "${decodedText}" není platné ISBN. Zkontrolujte kód nebo zadejte údaje ručně.`);
-              return;
-            }
+            // Barcode reads are never OCR-corrected or stripped of unexpected characters.
+            // Two matching reads guard against a single plausible but incorrect decode.
+            const validIsbn = verifyScan(decodedText);
+            if (!validIsbn) return;
 
             scannedLockRef.current = true;
-            lastScannedTimeRef.current = now;
 
-            console.log(`[scan] Normalized ISBN: ${cleaned || 'N/A'}, Recognized: ${validIsbn} (raw: ${decodedText})`);
-            setScanStatusInfo(`Kód detekován: ${decodedText} | ISBN: ${validIsbn}`);
+            setScanStatusInfo(`ISBN: ${validIsbn}`);
 
             safeStopScanner();
             onScanSuccess(validIsbn);
@@ -187,7 +169,7 @@ export default function ScannerModal({
 
     const timer = setTimeout(() => {
       startScanner();
-    }, 150);
+    }, 0);
 
     return () => {
       isCancelled = true;
