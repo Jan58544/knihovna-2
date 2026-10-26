@@ -20,6 +20,7 @@ export default function ScannerModal({
   const [manualGenre, setManualGenre] = useState('');
   const [showCustomFields, setShowCustomFields] = useState(initialShowCustomFields);
   const [cameraError, setCameraError] = useState(null);
+  const [cameraAttempt, setCameraAttempt] = useState(0);
   const [manualError, setManualError] = useState(null);
   const [isInitializing, setIsInitializing] = useState(false);
   const [scanStatusInfo, setScanStatusInfo] = useState(null);
@@ -124,6 +125,11 @@ export default function ScannerModal({
         const config = {
           fps: 24,
           disableFlip: true,
+          videoConstraints: {
+            facingMode: { ideal: 'environment' },
+            width: { ideal: 1280 },
+            height: { ideal: 720 },
+          },
           qrbox: (width, height) => ({
             width: Math.min(420, Math.floor(width * 0.9)),
             height: Math.min(180, Math.floor(height * 0.65)),
@@ -131,7 +137,7 @@ export default function ScannerModal({
         };
 
         await html5Qrcode.start(
-          { facingMode: 'environment', width: { ideal: 1280 }, height: { ideal: 720 } },
+          { facingMode: 'environment' },
           config,
           (decodedText) => {
             if (isCancelled || scannedLockRef.current) return;
@@ -161,7 +167,14 @@ export default function ScannerModal({
       } catch (err) {
         console.error('[scan] Camera initialization error:', err);
         if (!isCancelled) {
-          setCameraError('Kamera není dostupná nebo přístup nebyl povolen. Zadejte prosím ISBN ručně.');
+          const errorName = err?.name || String(err);
+          if (/NotAllowedError|PermissionDeniedError/.test(errorName)) {
+            setCameraError('Přístup ke kameře je zakázaný. V nastavení tohoto webu v prohlížeči povolte kameru a zkuste to znovu.');
+          } else if (/NotFoundError|DevicesNotFoundError/.test(errorName)) {
+            setCameraError('Nebyla nalezena kamera. Zkontrolujte její dostupnost nebo zadejte ISBN ručně.');
+          } else {
+            setCameraError('Kameru se nepodařilo spustit. Zavřete jiné aplikace používající kameru a zkuste to znovu.');
+          }
           setIsInitializing(false);
         }
       }
@@ -176,7 +189,7 @@ export default function ScannerModal({
       clearTimeout(timer);
       safeStopScanner();
     };
-  }, [isOpen, mode, onScanSuccess, handleClose, safeStopScanner]);
+  }, [isOpen, mode, onScanSuccess, handleClose, safeStopScanner, cameraAttempt]);
 
   const handleManualSubmit = (e) => {
     e.preventDefault();
@@ -310,6 +323,13 @@ export default function ScannerModal({
                 <div className="p-6 text-center text-red-400 text-sm">
                   <AlertCircle className="w-8 h-8 mx-auto mb-2 text-rose-500" />
                   <p className="font-semibold mb-2">{cameraError}</p>
+                  <button
+                    type="button"
+                    onClick={() => setCameraAttempt((attempt) => attempt + 1)}
+                    className="mt-3 mr-2 px-4 py-2 bg-neutral-800 text-white rounded-lg text-xs"
+                  >
+                    Zkusit kameru znovu
+                  </button>
                   <button
                     type="button"
                     onClick={() => {
