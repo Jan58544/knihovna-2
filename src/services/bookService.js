@@ -229,7 +229,7 @@ function recordMatchesIsbn(record, target13Isbn) {
  * @param {Object} [options] - Optional additional search details { title, author }
  * @returns {Promise<Object|null>} Book object or null if not found.
  */
-export async function fetchBookByIsbn(rawIsbn, options = {}) {
+async function lookupBook(rawIsbn, options = {}) {
   const queryText = (rawIsbn || '').trim();
   console.log('[scan] [bookService] Raw input received:', queryText);
 
@@ -314,4 +314,37 @@ export async function fetchBookByIsbn(rawIsbn, options = {}) {
 
   console.warn('[scan] [bookService] Book search completed: No book found for given criteria.');
   return null;
+}
+
+// Brief, bounded prefetches overlap network latency with camera confirmation.
+// Only confirmed scans consume a result; unsuccessful lookups are never retained.
+const scanPrefetches = new Map();
+const PREFETCH_TTL = 15000;
+
+export function prefetchBookByIsbn(isbn) {
+  if (!/^97[89]\d{10}$|^\d{9}[\dX]$/.test(isbn) || !isValidIsbn(isbn)) return;
+  const now = Date.now();
+  for (const [key, entry] of scanPrefetches) {
+    if (now - entry.time >= PREFETCH_TTL) scanPrefetches.delete(key);
+  }
+  if (scanPrefetches.has(isbn)) return;
+  if (scanPrefetches.size >= 4) scanPrefetches.delete(scanPrefetches.keys().next().value);
+  const entry = { time: now };
+  entry.promise = lookupBook(isbn).then(book => {
+    if (!book && scanPrefetches.get(isbn) === entry) scanPrefetches.delete(isbn);
+    return book;
+  }).catch(() => {
+    if (scanPrefetches.get(isbn) === entry) scanPrefetches.delete(isbn);
+    return null;
+  });
+  scanPrefetches.set(isbn, entry);
+}
+
+export async function fetchBookByIsbn(rawIsbn, options = {}) {
+  const entry = scanPrefetches.get(rawIsbn);
+  if (entry && Object.keys(options).length === 0) {
+    scanPrefetches.delete(rawIsbn);
+    if (Date.now() - entry.time < PREFETCH_TTL) return entry.promise;
+  }
+  return lookupBook(rawIsbn, options);
 }

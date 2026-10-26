@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import {
   fetchBookByIsbn,
+  prefetchBookByIsbn,
   stripCatalogPunctuation,
   formatAuthorKey,
   extractAuthors,
@@ -41,6 +42,34 @@ describe('bookService - Knihovny.cz Integration', () => {
     ],
     status: 'OK',
   };
+
+  it('starts lookup before confirmation and reuses the in-flight request', async () => {
+    let resolveRequest;
+    fetch.mockReturnValueOnce(new Promise(resolve => { resolveRequest = resolve; }));
+    prefetchBookByIsbn('9788025703670');
+    prefetchBookByIsbn('9788025703670');
+    expect(fetch).toHaveBeenCalledTimes(1);
+    const confirmed = fetchBookByIsbn('9788025703670');
+    expect(fetch).toHaveBeenCalledTimes(1);
+    resolveRequest({ ok: true, status: 200, json: async () => sampleKnihovnyResponse });
+    expect((await confirmed).isbn).toBe('9788025703670');
+  });
+
+  it('never prefetches invalid camera ISBNs', () => {
+    prefetchBookByIsbn('9788025703671');
+    prefetchBookByIsbn('9788O25703670');
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it('expires prefetched results and fetches again after 15 seconds', async () => {
+    fetch.mockResolvedValue({ ok: true, status: 200, json: async () => sampleKnihovnyResponse });
+    const now = Date.now();
+    vi.spyOn(Date, 'now').mockReturnValue(now);
+    prefetchBookByIsbn('9788025703670');
+    vi.mocked(Date.now).mockReturnValue(now + 15001);
+    await fetchBookByIsbn('9788025703670');
+    expect(fetch).toHaveBeenCalledTimes(2);
+  });
 
   it('fetches book by valid 13-digit ISBN via Knihovny.cz API and parses sample response', async () => {
     fetch.mockResolvedValueOnce({

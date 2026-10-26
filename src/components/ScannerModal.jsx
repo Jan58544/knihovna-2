@@ -9,6 +9,7 @@ export default function ScannerModal({
   isOpen,
   onClose,
   onScanSuccess,
+  onScanCandidate,
   initialMode = 'camera',
   initialInput = '',
   initialShowCustomFields = false,
@@ -120,13 +121,14 @@ export default function ScannerModal({
           verbose: false,
         });
         scannerRef.current = html5Qrcode;
-        const verifyScan = createIsbnScanVerifier();
+        const verifyScan = createIsbnScanVerifier(onScanCandidate);
 
         const config = {
-          fps: 24,
+          fps: 30,
           disableFlip: true,
           videoConstraints: {
             facingMode: { ideal: 'environment' },
+            frameRate: { ideal: 30 },
             width: { ideal: 1280 },
             height: { ideal: 720 },
           },
@@ -159,6 +161,15 @@ export default function ScannerModal({
         );
 
         if (!isCancelled) {
+          // Optional camera controls must never prevent scanning on Safari or older devices.
+          try {
+            const capabilities = html5Qrcode.getRunningTrackCapabilities();
+            if (capabilities.focusMode?.includes('continuous')) {
+              void html5Qrcode.applyVideoConstraints({
+                advanced: [{ focusMode: 'continuous' }],
+              }).catch(() => {});
+            }
+          } catch { /* Camera capabilities are not exposed by every browser. */ }
           console.log('[scan] Camera scanner started successfully');
           setIsInitializing(false);
         } else {
@@ -189,7 +200,7 @@ export default function ScannerModal({
       clearTimeout(timer);
       safeStopScanner();
     };
-  }, [isOpen, mode, onScanSuccess, handleClose, safeStopScanner, cameraAttempt]);
+  }, [isOpen, mode, onScanSuccess, handleClose, safeStopScanner, cameraAttempt, onScanCandidate]);
 
   const handleManualSubmit = (e) => {
     e.preventDefault();

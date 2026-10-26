@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { Camera, BookOpen, Loader2, Library } from 'lucide-react';
 import ScannerModal from './components/ScannerModal';
 import BookCard from './components/BookCard';
-import { fetchBookByIsbn } from './services/bookService';
+import { fetchBookByIsbn, prefetchBookByIsbn } from './services/bookService';
 import { cleanIsbn, isbn10To13, isbn13To10 } from './utils/isbnUtils';
 import { groupBooksByGenre } from './utils/genres';
 
@@ -256,6 +256,7 @@ export default function App() {
           isOpen={isScannerOpen}
           onClose={handleCloseScanner}
           onScanSuccess={handleScanSuccess}
+          onScanCandidate={prefetchBookByIsbn}
           initialMode={scannerMode}
           initialInput={scannerInput}
           initialShowCustomFields={scannerShowCustom}

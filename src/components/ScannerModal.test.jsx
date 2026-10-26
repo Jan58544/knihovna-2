@@ -21,7 +21,8 @@ describe('camera scanner', () => {
   it('restricts decoding, rejects altered codes, confirms a repeated ISBN, and ignores further callbacks', async () => {
     const success = vi.fn();
     const close = vi.fn();
-    render(<ScannerModal isOpen onClose={close} onScanSuccess={success} />);
+    const candidate = vi.fn();
+    render(<ScannerModal isOpen onClose={close} onScanSuccess={success} onScanCandidate={candidate} />);
     await waitFor(() => expect(camera.start).toHaveBeenCalledTimes(1));
     expect(camera.constructor).toHaveBeenCalledWith('reader', expect.objectContaining({ formatsToSupport: [9, 14], useBarCodeDetectorIfSupported: true }));
     const [selection, config, decode] = camera.start.mock.calls[0];
@@ -30,12 +31,13 @@ describe('camera scanner', () => {
     expect(Html5Qrcode.prototype.createVideoConstraints.call({}, selection)).toEqual({ facingMode: 'environment' });
     expect(config.videoConstraints).toEqual({
       facingMode: { ideal: 'environment' },
-      width: { ideal: 1280 }, height: { ideal: 720 },
+      width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30 },
     });
-    expect(config.fps).toBe(24);
+    expect(config.fps).toBe(30);
     expect(config.qrbox(240, 200)).toEqual({ width: 216, height: 130 });
     act(() => { decode('9788O25703670'); decode('9788025703671'); decode('9788025703670'); });
     expect(success).not.toHaveBeenCalled();
+    expect(candidate).toHaveBeenCalledExactlyOnceWith('9788025703670');
     // A second camera frame, rather than a second result within the same instant.
     await new Promise(resolve => setTimeout(resolve, 45));
     act(() => { decode('9788025703670'); decode('9788025703670'); });
